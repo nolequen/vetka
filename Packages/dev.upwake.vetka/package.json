@@ -1,0 +1,19 @@
+{
+  "name": "dev.upwake.vetka",
+  "version": "0.1.0",
+  "displayName": "Vetka – Git for Unity",
+  "description": "A Git client inside the Unity Editor, modelled on the version control integration of JetBrains IDEs: update project, commit, push, log, branches, stash and patches. Local changes are stashed automatically and any conflict rolls the operation back. Requires Git installed on the machine.",
+  "unity": "6000.0",
+  "documentationUrl": "https://upwake.dev/vetka",
+  "keywords": [
+    "git",
+    "vcs",
+    "version control",
+    "source control"
+  ],
+  "author": {
+    "name": "Anton Pocius",
+    "email": "vetka@upwake.dev",
+    "url": "https://upwake.dev/vetka"
+  }
+}
