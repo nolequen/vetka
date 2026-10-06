@@ -85,9 +85,9 @@ namespace Upwake.Vetka
         }
 
         [MenuItem("Tools/Git/Settings...", false, 5)]
-        public static void OpenSettingsWindow()
+        public static void OpenSettings()
         {
-            GitSettingsWindow.ShowWindow();
+            SettingsService.OpenUserPreferences(GitSettingsProvider.Path);
         }
     }
 }

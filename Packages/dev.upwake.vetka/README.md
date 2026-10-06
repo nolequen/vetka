@@ -37,8 +37,8 @@ hosting you already use.
   **Commit and Push**.
 - Right-click files in the Changes tab or the Project window for Show Diff, Blame, Rollback and
   more.
-- **Tools → Git → Settings...** sets the path to Git (found automatically), merge or rebase for
-  Update Project, and display options.
+- **Edit → Preferences → Vetka** (also **Tools → Git → Settings...**) sets the path to Git (found
+  automatically), merge or rebase for Update Project, and display options.
 
 Documentation: [upwake.dev/vetka](https://upwake.dev/vetka/). Release history: [CHANGELOG.md](CHANGELOG.md).
 

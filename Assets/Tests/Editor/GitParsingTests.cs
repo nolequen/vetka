@@ -34,7 +34,7 @@ namespace Upwake.Vetka.Tests
                 "_closing", "_aborted", "_focused"
             };
             var windows = typeof(Git).Assembly.GetTypes()
-                .Where(type => typeof(UnityEditor.EditorWindow).IsAssignableFrom(type) && type != typeof(GitSettingsWindow));
+                .Where(type => typeof(UnityEditor.EditorWindow).IsAssignableFrom(type));
             foreach (var window in windows)
             {
                 foreach (var field in window.GetFields(System.Reflection.BindingFlags.Instance |
@@ -44,6 +44,20 @@ namespace Upwake.Vetka.Tests
                     Assert.IsTrue(field.IsNotSerialized, $"{window.Name}.{field.Name} survives a domain reload");
                 }
             }
+        }
+
+        [Test]
+        public void Settings_AreAPreferencesPageFoundByGitWords()
+        {
+            var provider = GitSettingsProvider.Create();
+
+            Assert.AreEqual("Preferences/Vetka", provider.settingsPath);
+            Assert.AreEqual(UnityEditor.SettingsScope.User, provider.scope);
+            Assert.AreEqual("Vetka", provider.label);
+            CollectionAssert.IsSubsetOf(new[] { "git", "merge", "rebase", "branch", "status", "logging" },
+                provider.keywords);
+            Assert.IsTrue(provider.keywords.Any(keyword =>
+                keyword.IndexOf("path to git executable", System.StringComparison.OrdinalIgnoreCase) >= 0));
         }
 
         [Test]
