@@ -662,10 +662,12 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("a.txt", "a\n");
             repo.CommitAll("base");
-            repo.RunGit("config", "core.fsmonitor", "sleep 60; :");
+            var hanging = new HangingCommand(repo);
+            repo.RunGit("config", "core.fsmonitor", hanging.Command);
             var git = repo.Git;
 
-            var (changes, elapsed) = CancelLater(() => OperationContext.Interruptible(() => git.WorkingTreeChanges(), out _));
+            var (changes, elapsed) = CancelLater(hanging,
+                () => OperationContext.Interruptible(() => git.WorkingTreeChanges(), out _));
 
             Assert.Less(elapsed.TotalSeconds, 30);
             Assert.IsTrue(changes.Result.IsCancelled, changes.Result.Message);
@@ -679,8 +681,8 @@ namespace Upwake.Vetka.Tests
             repo.Write("a.txt", "a\n");
             repo.CommitAll("base");
             repo.Write("a.txt", "changed\n");
-            repo.RunGit("config", "core.fsmonitor", "sleep 60; :");
-            var sleeping = SleepCount();
+            var hanging = new HangingCommand(repo);
+            repo.RunGit("config", "core.fsmonitor", hanging.Command);
             var previous = Git.ReadingTimeout;
             Git.ReadingTimeout = TimeSpan.FromSeconds(1);
             try
@@ -690,7 +692,8 @@ namespace Upwake.Vetka.Tests
                 Assert.IsNull(repo.Git.HasUncommittedChanges());
 
                 Assert.Less(watch.Elapsed.TotalSeconds, 15);
-                AssertSleepCountReturnsTo(sleeping);
+                Assert.IsTrue(hanging.Started, "git never started the hanging command");
+                AssertStops(hanging);
             }
             finally
             {
@@ -730,7 +733,7 @@ namespace Upwake.Vetka.Tests
             var before = repo.Snapshot();
             var git = repo.Git;
 
-            var (result, elapsed) = CancelLater(() => git.UpdateProject(UpdateStrategy.Merge));
+            var (result, elapsed) = CancelLater(new HangingCommand(repo), () => git.UpdateProject(UpdateStrategy.Merge));
 
             Assert.Less(elapsed.TotalSeconds, 30);
             Assert.IsTrue(result.IsCancelled, result.Message);
@@ -747,7 +750,8 @@ namespace Upwake.Vetka.Tests
             var git = repo.Git;
             var committed = false;
 
-            var (result, elapsed) = CancelLater(() => git.CommitAndPush(new[] { "f.txt" }, "change", out committed));
+            var (result, elapsed) = CancelLater(new HangingCommand(repo),
+                () => git.CommitAndPush(new[] { "f.txt" }, "change", out committed));
 
             Assert.Less(elapsed.TotalSeconds, 30);
             Assert.IsTrue(committed);
@@ -936,27 +940,64 @@ namespace Upwake.Vetka.Tests
             repo.RunGit("remote", "add", "origin", "ssh://localhost/silent.git");
             repo.RunGit("update-ref", "refs/remotes/origin/main", "HEAD");
             repo.RunGit("branch", "-q", "--set-upstream-to=origin/main");
-            repo.RunGit("config", "core.sshCommand", "sleep 60; :");
+            repo.RunGit("config", "core.sshCommand", new HangingCommand(repo).Command);
             return repo;
         }
 
-        private static (T Result, TimeSpan Elapsed) CancelLater<T>(Func<T> run)
+        private sealed class HangingCommand
         {
-            var sleeping = SleepCount();
+            private readonly string _output;
+
+            public HangingCommand(TestRepository repo)
+            {
+                _output = Path.Combine(repo.BaseDirectory, "hanging-command.out");
+            }
+
+            public string Command => $"sleep 60 > '{_output.Replace('\\', '/').Replace("'", "'\\''")}'; :";
+
+            public bool Started => File.Exists(_output);
+
+            public bool Running
+            {
+                get
+                {
+                    if (!Started)
+                    {
+                        return false;
+                    }
+
+                    try
+                    {
+                        using (File.Open(_output, FileMode.Open, FileAccess.Read, FileShare.None))
+                        {
+                        }
+
+                        return false;
+                    }
+                    catch (IOException)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        private static (T Result, TimeSpan Elapsed) CancelLater<T>(HangingCommand hanging, Func<T> run)
+        {
             var context = new OperationContext(null);
             var watch = Stopwatch.StartNew();
             var task = Task.Run(() => OperationContext.With(context, run));
 
             var deadline = DateTime.UtcNow.AddSeconds(15);
-            while (SleepCount() <= sleeping && !task.IsCompleted && DateTime.UtcNow < deadline)
+            while (!hanging.Running && !task.IsCompleted && DateTime.UtcNow < deadline)
             {
                 Thread.Sleep(50);
             }
 
-            Assert.Greater(SleepCount(), sleeping, "git never started the hanging command");
+            Assert.IsTrue(hanging.Running, "git never started the hanging command");
             Assert.IsTrue(context.TryCancel(), "The hanging command is not interruptible");
             Assert.IsTrue(task.Wait(TimeSpan.FromSeconds(30)), "The operation did not stop after Cancel");
-            AssertSleepCountReturnsTo(sleeping);
+            AssertStops(hanging);
             return (task.Result, watch.Elapsed);
         }
 
@@ -996,17 +1037,15 @@ namespace Upwake.Vetka.Tests
             return catalogs;
         }
 
-        private static int SleepCount() => Process.GetProcessesByName("sleep").Length;
-
-        private static void AssertSleepCountReturnsTo(int expected)
+        private static void AssertStops(HangingCommand hanging)
         {
             var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (SleepCount() > expected && DateTime.UtcNow < deadline)
+            while (hanging.Running && DateTime.UtcNow < deadline)
             {
                 Thread.Sleep(100);
             }
 
-            Assert.AreEqual(expected, SleepCount(), "A process started by git is still running");
+            Assert.IsFalse(hanging.Running, "A process started by git is still running");
         }
 
         private static IEnumerable<GitFileChange> Files(params string[] paths) =>
