@@ -152,8 +152,31 @@ namespace Upwake.Vetka
 
         public GitIdentity Identity(bool global)
         {
-            var scope = global ? "--global" : "--local";
-            return new GitIdentity(ConfigValue(scope, "user.name"), ConfigValue(scope, "user.email"));
+            var identities = Identities();
+            return global ? identities.Global : identities.Local;
+        }
+
+        public (GitIdentity Local, GitIdentity Global) Identities()
+        {
+            var values = new Dictionary<string, string>();
+            var result = Run("config", "--includes", "--show-scope", "--get-regexp", "-z", @"^user\.(name|email)$");
+            if (result.IsSuccess)
+            {
+                var tokens = result.Output.Split('\0');
+                for (var i = 0; i + 1 < tokens.Length; i += 2)
+                {
+                    var entry = tokens[i + 1];
+                    var newline = entry.IndexOf('\n');
+                    var key = newline < 0 ? entry : entry.Substring(0, newline);
+                    values[tokens[i] + " " + key] = newline < 0 ? "" : entry.Substring(newline + 1);
+                }
+            }
+
+            GitIdentity Scoped(string scope) => new GitIdentity(
+                values.TryGetValue(scope + " user.name", out var name) ? name : "",
+                values.TryGetValue(scope + " user.email", out var email) ? email : "");
+
+            return (Scoped("local"), Scoped("global"));
         }
 
         public GitResult SetIdentity(GitIdentity identity, bool global, GitIdentity current = default)
@@ -176,12 +199,6 @@ namespace Upwake.Vetka
             return identity.Email != (current.Email ?? "")
                 ? Run("config", scope, "user.email", identity.Email)
                 : GitResult.Success("");
-        }
-
-        private string ConfigValue(string scope, string key)
-        {
-            var result = Run("config", scope, "--includes", "--get", "--default", "", key);
-            return result.IsSuccess ? result.Output : "";
         }
     }
 }

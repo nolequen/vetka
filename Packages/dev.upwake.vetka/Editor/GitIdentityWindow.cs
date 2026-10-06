@@ -13,42 +13,44 @@ namespace Upwake.Vetka
         private string _email = "";
         private bool _global = true;
         private Action<GitIdentity, bool> _onSubmit;
+        private Action _onCancel;
         [NonSerialized] private bool _focused;
         [NonSerialized] private bool _closing;
 
-        public static void Ensure(Git git, Action proceed)
+        public static void Ensure(Git git, Action proceed, Action stopped = null)
         {
             GitOperations.Read(
                 "Git: reading the user identity",
-                () => (local: git.Identity(global: false), global: git.Identity(global: true)),
+                git.Identities,
                 identities =>
                 {
                     var settings = GitProjectSettings.instance;
-                    if (identities.local.IsComplete || settings.UseGlobalIdentity && identities.global.IsComplete)
+                    if (identities.Local.IsComplete || settings.UseGlobalIdentity && identities.Global.IsComplete)
                     {
                         proceed();
                         return;
                     }
 
-                    var local = identities.local;
+                    var local = identities.Local;
                     var noLocal = string.IsNullOrEmpty(local.Name) && string.IsNullOrEmpty(local.Email);
-                    var prefill = noLocal ? identities.global : local;
+                    var prefill = noLocal ? identities.Global : local;
 
-                    Show(prefill, noLocal && identities.global.IsComplete, (entered, global) =>
+                    Show(prefill, noLocal && identities.Global.IsComplete, (entered, global) =>
                         GitOperations.Run(
                             "Git: saving the user identity",
-                            () => git.SetIdentity(entered, global, global ? identities.global : local),
+                            () => git.SetIdentity(entered, global, global ? identities.Global : local),
                             result =>
                             {
                                 if (!result.IsSuccess)
                                 {
                                     Notification.Show(result);
+                                    stopped?.Invoke();
                                     return;
                                 }
 
                                 settings.UseGlobalIdentity = global;
                                 proceed();
-                            }));
+                            }), stopped);
                 },
                 reason =>
                 {
@@ -56,10 +58,13 @@ namespace Upwake.Vetka
                     {
                         Notification.Show(GitResult.Failure($"The user identity cannot be read\n{reason}"));
                     }
+
+                    stopped?.Invoke();
                 });
         }
 
-        public static void Show(GitIdentity current, bool global, Action<GitIdentity, bool> callback)
+        public static void Show(GitIdentity current, bool global, Action<GitIdentity, bool> callback,
+            Action cancelled = null)
         {
             var window = CreateInstance<GitIdentityWindow>();
             window.titleContent = new GUIContent("Git User");
@@ -67,6 +72,7 @@ namespace Upwake.Vetka
             window._email = current.Email;
             window._global = global;
             window._onSubmit = callback;
+            window._onCancel = cancelled;
 
             var size = new Vector2(420, 165);
             var main = EditorGUIUtility.GetMainWindowPosition();
@@ -129,6 +135,7 @@ namespace Upwake.Vetka
                     var callback = _onSubmit;
                     var global = _global;
                     _onSubmit = null;
+                    _onCancel = null;
                     EditorApplication.delayCall += () => callback(identity, global);
                     CloseLater();
                 }
@@ -136,11 +143,24 @@ namespace Upwake.Vetka
 
             if (GUILayout.Button("Cancel", GUILayout.Width(80)) || cancel)
             {
-                _onSubmit = null;
+                Cancel();
                 CloseLater();
             }
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        private void OnDestroy() => Cancel();
+
+        private void Cancel()
+        {
+            var cancelled = _onCancel;
+            _onSubmit = null;
+            _onCancel = null;
+            if (cancelled != null)
+            {
+                EditorApplication.delayCall += () => cancelled();
+            }
         }
 
         private void CloseLater()

@@ -33,7 +33,6 @@ namespace Upwake.Vetka
         [SerializeField] private string _message = "";
         [NonSerialized] private string _aborted;
         [NonSerialized] private bool _committing;
-        [NonSerialized] private bool _commitRequested;
         private readonly HashSet<string> _selected = new HashSet<string>();
         private string _anchor;
         [SerializeField] private bool _changesExpanded = true;
@@ -612,32 +611,35 @@ namespace Upwake.Vetka
 
         private void Commit(bool push)
         {
-            if (_commitRequested)
+            if (_committing)
             {
                 return;
             }
 
-            _commitRequested = true;
+            _committing = true;
+            Repaint();
             var git = _git ??= new Git();
             var files = SelectedFiles();
             var message = _message;
 
             EditorApplication.delayCall += () =>
+                GitIdentityWindow.Ensure(git, () => Commit(git, files, message, push), CommitStopped);
+        }
+
+        private void CommitStopped()
+        {
+            if (!this)
             {
-                _commitRequested = false;
-                GitIdentityWindow.Ensure(git, () => Commit(git, files, message, push));
-            };
+                return;
+            }
+
+            _committing = false;
+            Repaint();
         }
 
         private void Commit(Git git, List<string> files, string message, bool push)
         {
             CommitMessageHistory.instance.Remember(message);
-            _committing = true;
-            if (this)
-            {
-                Repaint();
-            }
-
             var committed = false;
             GitOperations.Run(
                 push ? "Git: committing and pushing" : "Git: committing",

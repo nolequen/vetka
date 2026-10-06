@@ -473,6 +473,26 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void Identities_KeepLocalAndGlobalValuesApart()
+        {
+            using var repo = TestRepository.Create();
+            repo.RunGit("config", "--unset", "user.name");
+            repo.RunGit("config", "--unset", "user.email");
+            var none = repo.Git.Identities();
+            repo.RunGit("config", "--add", "user.name", "First Name");
+            repo.RunGit("config", "--add", "user.name", "Last Name");
+            File.WriteAllText(repo.GlobalConfig, "[user]\n\tname = Global Name\n\temail = global@example.com\n");
+
+            var (local, global) = repo.Git.Identities();
+
+            Assert.AreEqual(("", "", "", ""), (none.Local.Name, none.Local.Email, none.Global.Name, none.Global.Email));
+            Assert.AreEqual("Last Name", local.Name);
+            Assert.AreEqual("", local.Email);
+            Assert.AreEqual("Global Name", global.Name);
+            Assert.AreEqual("global@example.com", global.Email);
+        }
+
+        [Test]
         public void CommitAndPush_WhenThePushIsRejected_SaysTheCommitWasMade()
         {
             using var remote = TestRepository.CreateBare();
