@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -537,6 +538,28 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void GitMessages_AreReadInEnglishWhateverLanguageTheUserHas()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "a\n");
+            repo.CommitAll("base");
+            var korean = new Dictionary<string, string>
+            {
+                ["GIT_TEXTDOMAINDIR"] = TranslatedGitMessages(repo.BaseDirectory),
+                ["LANG"] = "ko_KR.UTF-8",
+                ["LC_ALL"] = "ko_KR.UTF-8",
+                ["LANGUAGE"] = "ko"
+            };
+            Assume.That(repo.RunGitWith(korean, "branch", "-d", "missing").error, Does.StartWith("ERROR-KO: "),
+                "git is built without translations");
+
+            var result = repo.GitWithVariables(korean).DeleteBranch("missing", force: false);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("branch 'missing' not found", result.Message);
+        }
+
+        [Test]
         public void TestRepositories_DoNotReadTheUsersGitConfig()
         {
             using var repo = TestRepository.Create();
@@ -915,6 +938,42 @@ namespace Upwake.Vetka.Tests
             Assert.IsTrue(task.Wait(TimeSpan.FromSeconds(30)), "The operation did not stop after Cancel");
             AssertSleepCountReturnsTo(sleeping);
             return (task.Result, watch.Elapsed);
+        }
+
+        private static string TranslatedGitMessages(string directory)
+        {
+            var messages = new SortedDictionary<string, string>(StringComparer.Ordinal)
+            {
+                [""] = "Content-Type: text/plain; charset=UTF-8\n",
+                ["error: "] = "ERROR-KO: ",
+                ["fatal: "] = "FATAL-KO: "
+            };
+            var strings = messages.Keys.Concat(messages.Values).Select(Encoding.UTF8.GetBytes).ToList();
+            var count = messages.Count;
+            var catalogs = Path.Combine(directory, "locale");
+            var folder = Path.Combine(catalogs, "ko", "LC_MESSAGES");
+            Directory.CreateDirectory(folder);
+            using var writer = new BinaryWriter(File.Create(Path.Combine(folder, "git.mo")));
+            foreach (var value in new uint[] { 0x950412de, 0, (uint)count, 28, (uint)(28 + 8 * count), 0, 0 })
+            {
+                writer.Write(value);
+            }
+
+            var position = 28 + 16 * count;
+            foreach (var value in strings)
+            {
+                writer.Write((uint)value.Length);
+                writer.Write((uint)position);
+                position += value.Length + 1;
+            }
+
+            foreach (var value in strings)
+            {
+                writer.Write(value);
+                writer.Write((byte)0);
+            }
+
+            return catalogs;
         }
 
         private static int SleepCount() => Process.GetProcessesByName("sleep").Length;

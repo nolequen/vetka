@@ -121,6 +121,7 @@ namespace Upwake.Vetka
             }
 
             startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+            startInfo.Environment["LANGUAGE"] = "en";
             if (kind == CommandKind.Reading)
             {
                 startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";

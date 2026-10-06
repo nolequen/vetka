@@ -51,7 +51,9 @@ namespace Upwake.Vetka.Tests
         public Git Git => NewGit(_variables);
 
         public Git GitWithVariable(string name, string value) =>
-            NewGit(new Dictionary<string, string>(_variables) { [name] = value });
+            GitWithVariables(new Dictionary<string, string> { [name] = value });
+
+        public Git GitWithVariables(IReadOnlyDictionary<string, string> variables) => NewGit(WithVariables(variables));
 
         public static Git GitAt(string directory) => new Git(GitExecutable, directory, IsolatedVariables(directory));
 
@@ -60,6 +62,17 @@ namespace Upwake.Vetka.Tests
             var project = Path.Combine(Root, ProjectFolder);
             Directory.CreateDirectory(project);
             return new Git(GitExecutable, project, variables);
+        }
+
+        private Dictionary<string, string> WithVariables(IReadOnlyDictionary<string, string> variables)
+        {
+            var all = new Dictionary<string, string>(_variables);
+            foreach (var variable in variables)
+            {
+                all[variable.Key] = variable.Value;
+            }
+
+            return all;
         }
 
         private static Dictionary<string, string> IsolatedVariables(string baseDirectory)
@@ -130,6 +143,9 @@ namespace Upwake.Vetka.Tests
         }
 
         public int TryRunGit(params string[] arguments) => Run(Root, _variables, arguments).exitCode;
+
+        public (int exitCode, string output, string error) RunGitWith(IReadOnlyDictionary<string, string> variables,
+            params string[] arguments) => Run(Root, WithVariables(variables), arguments);
 
         public void Write(string path, string content) => WriteBytes(path, Utf8.GetBytes(content));
 
