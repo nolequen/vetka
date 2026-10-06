@@ -33,6 +33,7 @@ namespace Upwake.Vetka
         [SerializeField] private string _message = "";
         [NonSerialized] private string _aborted;
         [NonSerialized] private bool _committing;
+        [NonSerialized] private bool _pushing;
         private readonly HashSet<string> _selected = new HashSet<string>();
         private string _anchor;
         [SerializeField] private bool _changesExpanded = true;
@@ -588,6 +589,11 @@ namespace Upwake.Vetka
             GUILayout.Space(4);
             using (new EditorGUILayout.HorizontalScope())
             {
+                if (_committing)
+                {
+                    DrawCommitting();
+                }
+
                 GUILayout.FlexibleSpace();
                 using (new EditorGUI.DisabledScope(!canCommit))
                 {
@@ -604,10 +610,23 @@ namespace Upwake.Vetka
             }
         }
 
+        private void DrawCommitting()
+        {
+            var frame = (int)(EditorApplication.timeSinceStartup * 10) % 12;
+            var spinner = EditorGUIUtility.IconContent($"WaitSpin{frame:00}").image;
+            EditorGUIUtility.SetIconSize(new Vector2(16, 16));
+            GUILayout.Label(new GUIContent(_pushing ? " Committing and pushing..." : " Committing...", spinner),
+                GreyStyle, GUILayout.ExpandWidth(false));
+            EditorGUIUtility.SetIconSize(Vector2.zero);
+            Repaint();
+        }
+
         private List<string> SelectedFiles() =>
             _changes == null
                 ? new List<string>()
                 : FileActions.WithOldPaths(_changes.Concat(_unversioned).Where(entry => entry.Checked).Select(Change));
+
+        private static string CommitTitle(bool push) => push ? "Git: committing and pushing" : "Git: committing";
 
         private void Commit(bool push)
         {
@@ -617,13 +636,19 @@ namespace Upwake.Vetka
             }
 
             _committing = true;
+            _pushing = push;
             Repaint();
             var git = _git ??= new Git();
             var files = SelectedFiles();
             var message = _message;
+            var progress = GitOperations.StartProgress(CommitTitle(push), push);
 
             EditorApplication.delayCall += () =>
-                GitIdentityWindow.Ensure(git, () => Commit(git, files, message, push), CommitStopped);
+                GitIdentityWindow.Ensure(git, () => Commit(git, files, message, push, progress), () =>
+                {
+                    GitOperations.DropProgress(progress);
+                    CommitStopped();
+                });
         }
 
         private void CommitStopped()
@@ -637,12 +662,12 @@ namespace Upwake.Vetka
             Repaint();
         }
 
-        private void Commit(Git git, List<string> files, string message, bool push)
+        private void Commit(Git git, List<string> files, string message, bool push, int progress)
         {
             CommitMessageHistory.instance.Remember(message);
             var committed = false;
             GitOperations.Run(
-                push ? "Git: committing and pushing" : "Git: committing",
+                CommitTitle(push),
                 () =>
                 {
                     if (push)
@@ -684,7 +709,8 @@ namespace Upwake.Vetka
                 },
                 refreshAssets: true,
                 reportsProgress: push,
-                prepare: UnsavedChanges.SaveOrCancel
+                prepare: UnsavedChanges.SaveOrCancel,
+                progressId: progress
             );
         }
     }

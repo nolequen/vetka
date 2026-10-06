@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using NUnit.Framework;
@@ -115,6 +116,46 @@ namespace Upwake.Vetka.Tests
         }
 
         [UnityTest]
+        public IEnumerator Run_WithAProgressStartedEarlier_ShowsOnlyThatOne()
+        {
+            using var release = new ManualResetEventSlim(false);
+            var progress = GitOperations.StartProgress("Git: started early", false);
+            var started = false;
+            var done = false;
+
+            GitOperations.Run("Git: started early", () =>
+            {
+                started = true;
+                release.Wait(5000);
+                return GitResult.Success("done");
+            }, _ => done = true, progressId: progress);
+
+            yield return WaitUntil(() => started);
+            var shown = Progress.EnumerateItems().Where(item => item.name == "Git: started early")
+                .Select(item => item.id).ToList();
+            release.Set();
+            yield return WaitUntil(() => done && !Running(progress));
+            CollectionAssert.AreEqual(new[] { progress }, shown);
+            Assert.IsTrue(done, "The operation never finished");
+            Assert.IsFalse(Running(progress));
+        }
+
+        [UnityTest]
+        public IEnumerator Run_WhenThePreparationIsDeclined_DropsTheProgressStartedEarlier()
+        {
+            var progress = GitOperations.StartProgress("Git: declined early", false);
+            GitResult? reported = null;
+
+            GitOperations.Run("Git: declined early", () => GitResult.Success("done"), result => reported = result,
+                prepare: () => false, progressId: progress);
+
+            yield return WaitUntil(() => reported.HasValue && !Progress.Exists(progress));
+            Assert.IsTrue(reported.HasValue, "The operation never reported back");
+            Assert.IsTrue(reported.Value.IsCancelled);
+            Assert.IsFalse(Progress.Exists(progress));
+        }
+
+        [UnityTest]
         public IEnumerator Run_PreparesOnlyWhenItsTurnComes()
         {
             using var release = new ManualResetEventSlim(false);
@@ -140,6 +181,9 @@ namespace Upwake.Vetka.Tests
             Assert.IsTrue(secondDone, "The second operation never finished");
             Assert.IsTrue(preparedAfterFirst);
         }
+
+        private static bool Running(int progress) =>
+            Progress.Exists(progress) && Progress.GetStatus(progress) == Progress.Status.Running;
 
         private static IEnumerator WaitUntil(Func<bool> condition)
         {

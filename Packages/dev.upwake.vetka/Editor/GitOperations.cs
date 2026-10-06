@@ -23,6 +23,7 @@ namespace Upwake.Vetka
             public bool RefreshAssets;
             public bool ChangesRepository;
             public bool ReportsProgress;
+            public int? ProgressId;
             public bool AutoRefreshDisallowed;
         }
 
@@ -75,7 +76,7 @@ namespace Upwake.Vetka
 
         public static void Run(string title, Func<GitResult> work, Action<GitResult> onCompleted = null,
             bool refreshAssets = false, bool reportsProgress = false, bool changesRepository = false,
-            Func<bool> prepare = null)
+            Func<bool> prepare = null, int? progressId = null)
         {
             EditorApplication.LockReloadAssemblies();
             Pending.Enqueue(new Operation
@@ -90,10 +91,31 @@ namespace Upwake.Vetka
                 Guarded = true,
                 RefreshAssets = refreshAssets,
                 ChangesRepository = changesRepository || refreshAssets,
-                ReportsProgress = reportsProgress
+                ReportsProgress = reportsProgress,
+                ProgressId = progressId
             });
 
             StartNext();
+        }
+
+        public static int StartProgress(string title, bool reportsProgress)
+        {
+            var id = Progress.Start(title, null,
+                reportsProgress ? Progress.Options.None : Progress.Options.Indefinite);
+            if (reportsProgress)
+            {
+                Progress.Report(id, 0f, "Starting...");
+            }
+
+            return id;
+        }
+
+        public static void DropProgress(int id)
+        {
+            if (Progress.Exists(id))
+            {
+                Progress.Remove(id);
+            }
         }
 
         public static void Read<T>(string title, Func<T> work, Action<T> onCompleted, Action<string> onAborted = null)
@@ -149,6 +171,11 @@ namespace Upwake.Vetka
                 EditorApplication.UnlockReloadAssemblies();
             }
 
+            if (operation.ProgressId.HasValue)
+            {
+                DropProgress(operation.ProgressId.Value);
+            }
+
             try
             {
                 operation.Declined?.Invoke();
@@ -167,13 +194,7 @@ namespace Upwake.Vetka
             var context = new OperationContext(null);
             try
             {
-                progressId = Progress.Start(operation.Title, null,
-                    operation.ReportsProgress ? Progress.Options.None : Progress.Options.Indefinite);
-                if (operation.ReportsProgress)
-                {
-                    Progress.Report(progressId.Value, 0f, "Starting...");
-                }
-
+                progressId = operation.ProgressId ?? StartProgress(operation.Title, operation.ReportsProgress);
                 if (operation.RefreshAssets)
                 {
                     AssetDatabase.DisallowAutoRefresh();
