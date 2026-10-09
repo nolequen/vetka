@@ -31,6 +31,8 @@ namespace Upwake.Vetka
         [NonSerialized] private Git _git;
         private Vector2 _filesScrollPos = Vector2.up;
         [SerializeField] private string _message = "";
+        [SerializeField] private float _messageHeight = 60;
+        [NonSerialized] private float _dragOffset;
         [NonSerialized] private string _aborted;
         [NonSerialized] private bool _committing;
         [NonSerialized] private bool _pushing;
@@ -283,7 +285,7 @@ namespace Upwake.Vetka
             using (new EditorGUILayout.VerticalScope(PaddingStyle))
             {
                 DrawFiles();
-                DrawSeparator();
+                DrawSplitter();
                 DrawMessage();
                 DrawButtons();
             }
@@ -376,11 +378,36 @@ namespace Upwake.Vetka
             return expanded;
         }
 
-        private static void DrawSeparator()
+        private const float MinMessageHeight = 36;
+
+        private float MessageHeight(float wanted) =>
+            Mathf.Clamp(wanted, MinMessageHeight, Mathf.Max(MinMessageHeight, position.height - 150));
+
+        private void DrawSplitter()
         {
-            GUILayout.Space(4);
-            EditorGUI.DrawRect(GUILayoutUtility.GetRect(1, 1, GUILayout.ExpandWidth(true)), SeparatorColor);
-            GUILayout.Space(6);
+            var area = GUILayoutUtility.GetRect(1, 11, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(new Rect(area.x, area.y + 4, area.width, 1), SeparatorColor);
+            EditorGUIUtility.AddCursorRect(area, MouseCursor.ResizeVertical);
+
+            var id = GUIUtility.GetControlID(FocusType.Passive);
+            var current = Event.current;
+            switch (current.GetTypeForControl(id))
+            {
+                case EventType.MouseDown when current.button == 0 && area.Contains(current.mousePosition):
+                    GUIUtility.hotControl = id;
+                    _dragOffset = current.mousePosition.y + MessageHeight(_messageHeight);
+                    current.Use();
+                    break;
+                case EventType.MouseDrag when GUIUtility.hotControl == id:
+                    _messageHeight = MessageHeight(_dragOffset - current.mousePosition.y);
+                    current.Use();
+                    Repaint();
+                    break;
+                case EventType.MouseUp when GUIUtility.hotControl == id:
+                    GUIUtility.hotControl = 0;
+                    current.Use();
+                    break;
+            }
         }
 
         private void DrawFile(Rect rect, FileEntry entry)
@@ -525,8 +552,8 @@ namespace Upwake.Vetka
 
         private void DrawMessage()
         {
-            var rect = GUILayoutUtility.GetRect(GUIContent.none, MessageStyle, GUILayout.Height(60),
-                GUILayout.ExpandWidth(true));
+            var rect = GUILayoutUtility.GetRect(GUIContent.none, MessageStyle,
+                GUILayout.Height(MessageHeight(_messageHeight)), GUILayout.ExpandWidth(true));
             var historyRect = new Rect(rect.xMax - 20, rect.y + 2, 18, 18);
 
             var current = Event.current;
