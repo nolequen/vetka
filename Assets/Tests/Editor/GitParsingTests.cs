@@ -30,7 +30,7 @@ namespace Upwake.Vetka.Tests
         {
             var transient = new HashSet<string>
             {
-                "_git", "_loading", "_loaded", "_pushing", "_committing", "_commitRequested", "_amendRequested",
+                "_git", "_loading", "_loaded", "_pushing", "_committing", "_busy", "_amendRequested",
                 "_closing", "_aborted", "_focused"
             };
             var windows = typeof(Git).Assembly.GetTypes()

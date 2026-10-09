@@ -16,6 +16,7 @@ namespace Upwake.Vetka
         private string _branch;
         private Vector2 _scrollPos;
         [NonSerialized] private bool _loading;
+        [NonSerialized] private bool _busy;
         [NonSerialized] private string _aborted;
         private string _selected;
         private List<GitFileChange> _files;
@@ -269,15 +270,16 @@ namespace Upwake.Vetka
 
             EditorGUILayout.BeginHorizontal();
 
-            using (new EditorGUI.DisabledScope(_loading || !hasCommits))
+            using (new EditorGUI.DisabledScope(_loading || _busy || !hasCommits))
             {
                 if (GUILayout.Button("Amend last commit..."))
                 {
                     EditorApplication.delayCall += () => AmendCommitWindow.ShowWindow(new Git(), OnAmended);
                 }
 
-                if (GUILayout.Button("Undo last commit"))
+                if (GUILayout.Button("Undo last commit") && !_busy)
                 {
+                    _busy = true;
                     EditorApplication.delayCall += () => UndoLastCommit(head);
                 }
             }
@@ -312,6 +314,11 @@ namespace Upwake.Vetka
 
             if (!EditorUtility.DisplayDialog("Undo last commit", warning, "Undo", "Cancel"))
             {
+                if (this)
+                {
+                    _busy = false;
+                }
+
                 return;
             }
 
@@ -320,6 +327,7 @@ namespace Upwake.Vetka
             {
                 if (this)
                 {
+                    _busy = false;
                     Refresh();
                 }
 

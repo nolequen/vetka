@@ -14,6 +14,7 @@ namespace Upwake.Vetka
         private bool _includeUntracked;
         private Vector2 _scrollPos;
         [NonSerialized] private bool _loading;
+        [NonSerialized] private bool _busy;
         [NonSerialized] private string _aborted;
 
         private static GUIStyle _hintStyle;
@@ -108,11 +109,11 @@ namespace Upwake.Vetka
 
             EditorGUILayout.BeginHorizontal();
             _message = EditorGUILayout.TextField(_message);
-            using (new EditorGUI.DisabledScope(_loading))
+            using (new EditorGUI.DisabledScope(_loading || _busy))
             {
                 if (GUILayout.Button("Stash", GUILayout.Width(80)))
                 {
-                    EditorApplication.delayCall += Stash;
+                    StartAction(Stash);
                 }
             }
 
@@ -163,21 +164,21 @@ namespace Upwake.Vetka
             EditorGUILayout.BeginHorizontal();
 
             var selected = _stashes?.Find(stash => stash.Hash == _selected) ?? default;
-            using (new EditorGUI.DisabledScope(_loading || selected.Hash == null))
+            using (new EditorGUI.DisabledScope(_loading || _busy || selected.Hash == null))
             {
                 if (GUILayout.Button("Apply"))
                 {
-                    EditorApplication.delayCall += () => Apply(selected, drop: false);
+                    StartAction(() => Apply(selected, drop: false));
                 }
 
                 if (GUILayout.Button("Pop"))
                 {
-                    EditorApplication.delayCall += () => Apply(selected, drop: true);
+                    StartAction(() => Apply(selected, drop: true));
                 }
 
                 if (GUILayout.Button("Drop"))
                 {
-                    EditorApplication.delayCall += () => Drop(selected);
+                    StartAction(() => Drop(selected));
                 }
             }
 
@@ -192,6 +193,17 @@ namespace Upwake.Vetka
             }
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        private void StartAction(Action action)
+        {
+            if (_busy)
+            {
+                return;
+            }
+
+            _busy = true;
+            EditorApplication.delayCall += () => action();
         }
 
         private void Stash()
@@ -209,6 +221,7 @@ namespace Upwake.Vetka
             {
                 if (this)
                 {
+                    _busy = false;
                     if (result.IsSuccess)
                     {
                         _message = "";
@@ -244,6 +257,11 @@ namespace Upwake.Vetka
             if (!EditorUtility.DisplayDialog("Drop stash",
                     $"Drop {stash.Reference} \"{stash.Message}\"?\n\nIts changes will be lost.", "Drop", "Cancel"))
             {
+                if (this)
+                {
+                    _busy = false;
+                }
+
                 return;
             }
 
@@ -255,6 +273,7 @@ namespace Upwake.Vetka
         {
             if (this)
             {
+                _busy = false;
                 Refresh();
             }
 
