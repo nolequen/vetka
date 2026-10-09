@@ -51,11 +51,28 @@ namespace Upwake.Vetka
             return new GitPushTarget(chosen, branch, exists);
         }
 
-        public GitResult Push()
+        public (string Tracked, int Count, List<string> Commits) RemoteOnlyCommits(GitPushTarget target, int limit = 50)
+        {
+            var tracked = TrackedCommit(target);
+            if (tracked == null)
+            {
+                return (null, 0, new List<string>());
+            }
+
+            var count = Run("rev-list", "--count", $"HEAD..{tracked}");
+            var log = Run("log", $"HEAD..{tracked}", "--pretty=format:%h %s", "-n", limit.ToString());
+            return (tracked,
+                count.IsSuccess && int.TryParse(count.Output, out var parsed) ? parsed : 0,
+                !log.IsSuccess || string.IsNullOrWhiteSpace(log.Output)
+                    ? new List<string>()
+                    : log.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList());
+        }
+
+        public GitResult Push(string forceOver = null)
         {
             var target = PushTarget();
             var before = target.HasValue ? TrackedCommit(target.Value) : null;
-            var result = Interruptible("Push", PushHead);
+            var result = Interruptible("Push", () => PushHead(forceOver));
             if (!result.IsCancelled || !target.HasValue)
             {
                 return result;
@@ -76,7 +93,7 @@ namespace Upwake.Vetka
             return tracked.IsSuccess ? tracked.Output : null;
         }
 
-        private GitResult PushHead()
+        private GitResult PushHead(string forceOver)
         {
             var branch = CurrentBranch(out var branchError);
             if (branch == null)
@@ -98,8 +115,20 @@ namespace Upwake.Vetka
             var target = found.Value;
             var outgoing = Run(new[] { "rev-list", "--count" }.Concat(OutgoingRange(target, "HEAD")).ToArray());
             var count = outgoing.IsSuccess && int.TryParse(outgoing.Output, out var parsed) ? parsed : 0;
+            var force = forceOver != null && target.Exists;
+            var removed = 0;
+            if (force)
+            {
+                var lost = Run("rev-list", "--count", $"HEAD..{forceOver}");
+                removed = lost.IsSuccess && int.TryParse(lost.Output, out var dropped) ? dropped : 0;
+            }
 
             var arguments = new List<string> { "push", "--progress" };
+            if (force)
+            {
+                arguments.Add($"--force-with-lease=refs/heads/{target.Branch}:{forceOver}");
+            }
+
             if (string.IsNullOrEmpty(UpstreamBranch()))
             {
                 arguments.Add("--set-upstream");
@@ -110,11 +139,36 @@ namespace Upwake.Vetka
             var result = RunWithProgress(LfsProgress, arguments.ToArray());
             if (!result.IsSuccess)
             {
+                if (force && result.Message.Contains("[rejected]") && result.Message.Contains("stale info"))
+                {
+                    return GitResult.Failure(
+                        $"Force push rejected: {target.Name} has changed on the remote since you looked at it, " +
+                        "update the project to see the new commits");
+                }
+
                 var rejected = result.Message.Contains("[rejected]") &&
                                (result.Message.Contains("fetch first") || result.Message.Contains("non-fast-forward"));
                 return rejected
                     ? GitResult.Failure("Push rejected: the remote has new commits, update the project first")
                     : result;
+            }
+
+            if (force)
+            {
+                var parts = new List<string>();
+                if (count > 0)
+                {
+                    parts.Add($"{Counted(count, "commit")} pushed");
+                }
+
+                if (removed > 0)
+                {
+                    parts.Add($"{Counted(removed, "commit")} removed");
+                }
+
+                return GitResult.Success(parts.Count > 0
+                    ? $"Force pushed to {target.Name}: {string.Join(", ", parts)}"
+                    : $"Force pushed to {target.Name}");
             }
 
             if (!target.Exists)

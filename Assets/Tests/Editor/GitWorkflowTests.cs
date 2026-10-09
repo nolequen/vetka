@@ -763,6 +763,78 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void ForcePush_AfterUndoingAPushedCommit_RemovesItFromTheRemote()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            var start = local.Head;
+            local.Write("f.txt", "pushed by mistake\n");
+            local.CommitAll("mistake");
+            local.RunGit("push", "-q");
+            var git = local.Git;
+            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
+            var target = git.PushTarget().Value;
+
+            var seen = git.RemoteOnlyCommits(target);
+            var result = git.Push(seen.Tracked);
+
+            Assert.AreEqual(1, seen.Count);
+            StringAssert.EndsWith("mistake", seen.Commits[0]);
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Force pushed to origin/main: 1 commit removed", result.Message);
+            Assert.AreEqual(start, remote.RunGit("rev-parse", "main"));
+            Assert.AreEqual(0, git.RemoteOnlyCommits(target).Count);
+        }
+
+        [Test]
+        public void ForcePush_ReplacesTheirCommitsWithYours()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            local.RunGit("fetch", "-q");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            var git = local.Git;
+
+            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
+            var result = git.Push(seen.Tracked);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Force pushed to origin/main: 1 commit pushed, 1 commit removed", result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
+        }
+
+        [Test]
+        public void ForcePush_WhenTheRemoteMovedSinceItWasShown_ChangesNothing()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            local.RunGit("fetch", "-q");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            var git = local.Git;
+            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
+            upstream.Write("f.txt", "theirs again\n");
+            upstream.CommitAll("theirs again");
+            upstream.RunGit("push", "-q");
+            var remoteHead = remote.RunGit("rev-parse", "main");
+
+            var result = git.Push(seen.Tracked);
+
+            Assert.IsFalse(result.IsSuccess);
+            StringAssert.StartsWith("Force push rejected: origin/main has changed on the remote", result.Message);
+            Assert.AreEqual(remoteHead, remote.RunGit("rev-parse", "main"));
+        }
+
+        [Test]
         public void Cancel_StopsAHangingReadWithItsChildProcesses()
         {
             using var repo = TestRepository.Create();
