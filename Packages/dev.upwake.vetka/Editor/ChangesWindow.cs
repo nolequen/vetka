@@ -717,30 +717,34 @@ namespace Upwake.Vetka
                 },
                 result =>
                 {
-                    Notification.Show(result);
-
-                    if (!this)
+                    if (this)
                     {
-                        if (!committed)
+                        _committing = false;
+                        if (committed)
                         {
-                            ShowWindow(git, message);
+                            ChangesSelection.instance.Forget(files);
                         }
 
-                        return;
-                    }
+                        if (committed && _message == message)
+                        {
+                            SetMessage("");
+                        }
 
-                    _committing = false;
-                    if (committed)
+                        Repaint();
+                    }
+                    else if (!committed)
                     {
-                        ChangesSelection.instance.Forget(files);
+                        ShowWindow(git, message);
                     }
 
-                    if (committed && _message == message)
+                    if (result.IsRejected)
                     {
-                        SetMessage("");
+                        RejectedPush.Offer(git, result);
                     }
-
-                    Repaint();
+                    else
+                    {
+                        Notification.Show(result);
+                    }
                 },
                 refreshAssets: true,
                 reportsProgress: push,

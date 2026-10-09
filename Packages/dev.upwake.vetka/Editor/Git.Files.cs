@@ -119,9 +119,13 @@ namespace Upwake.Vetka
                 return GitResult.Cancelled($"{CommitSummary(message, false)}, push cancelled");
             }
 
-            return push.IsSuccess
-                ? GitResult.Success(CommitSummary(message, false, PushTarget()?.Name ?? "the remote"))
-                : GitResult.Failure($"{CommitSummary(message, false)}, but the push failed\n{push.Message}");
+            if (push.IsSuccess)
+            {
+                return GitResult.Success(CommitSummary(message, false, PushTarget()?.Name ?? "the remote"));
+            }
+
+            var failed = $"{CommitSummary(message, false)}, but the push failed\n{push.Message}";
+            return push.IsRejected ? GitResult.Rejected(failed) : GitResult.Failure(failed);
         }
 
         private string CommitSummary(string message, bool amend, string pushedTo = null)

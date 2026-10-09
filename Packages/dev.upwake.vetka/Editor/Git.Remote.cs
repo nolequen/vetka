@@ -149,7 +149,7 @@ namespace Upwake.Vetka
                 var rejected = result.Message.Contains("[rejected]") &&
                                (result.Message.Contains("fetch first") || result.Message.Contains("non-fast-forward"));
                 return rejected
-                    ? GitResult.Failure("Push rejected: the remote has new commits, update the project first")
+                    ? GitResult.Rejected("Push rejected: the remote has new commits, update the project first")
                     : result;
             }
 

@@ -202,8 +202,32 @@ namespace Upwake.Vetka
                     Refresh();
                 }
 
-                Notification.Show(result);
+                if (result.IsRejected)
+                {
+                    RejectedPush.Offer(git, result, OnUpdatedAndPushed);
+                }
+                else
+                {
+                    Notification.Show(result);
+                }
             }, reportsProgress: true, changesRepository: true);
+        }
+
+        private void OnUpdatedAndPushed(GitResult result)
+        {
+            if (!this)
+            {
+                return;
+            }
+
+            if (result.IsSuccess)
+            {
+                Close();
+            }
+            else
+            {
+                Refresh();
+            }
         }
     }
 }

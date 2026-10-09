@@ -49,6 +49,25 @@ namespace Upwake.Vetka
             return Integrate(strategy, upstream);
         }
 
+        public GitResult UpdateAndPush(UpdateStrategy strategy)
+        {
+            var update = UpdateProject(strategy);
+            if (!update.IsSuccess)
+            {
+                return update;
+            }
+
+            var push = Push();
+            if (push.IsSuccess)
+            {
+                return GitResult.Success($"{update.Message}\n{push.Message}");
+            }
+
+            return push.IsCancelled
+                ? GitResult.Cancelled($"{update.Message}, push cancelled")
+                : GitResult.Failure($"{update.Message}, but the push failed\n{push.Message}");
+        }
+
         public GitResult Integrate(UpdateStrategy strategy, string target, string name = null)
         {
             if (strategy == UpdateStrategy.Ask)

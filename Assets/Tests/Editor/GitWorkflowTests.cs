@@ -613,6 +613,7 @@ namespace Upwake.Vetka.Tests
 
             Assert.IsTrue(committed);
             Assert.IsFalse(result.IsSuccess);
+            Assert.IsTrue(result.IsRejected);
             Assert.AreEqual("1 file committed: mine, but the push failed\n" +
                             "Push rejected: the remote has new commits, update the project first", result.Message);
             Assert.AreEqual("mine", local.RunGit("log", "-1", "--format=%s"));
@@ -759,7 +760,41 @@ namespace Upwake.Vetka.Tests
             var result = local.Git.Push();
 
             Assert.IsFalse(result.IsSuccess);
+            Assert.IsTrue(result.IsRejected);
             Assert.AreEqual("Push rejected: the remote has new commits, update the project first", result.Message);
+        }
+
+        [TestCase(UpdateStrategy.Merge)]
+        [TestCase(UpdateStrategy.Rebase)]
+        public void UpdateAndPush_AfterARejectedPush_BringsTheirCommitsAndPushesMine(UpdateStrategy strategy)
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            var theirs = upstream.Head;
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            var git = local.Git;
+            Assert.IsTrue(git.Push().IsRejected);
+
+            var result = git.UpdateAndPush(strategy);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
+            Assert.AreEqual(0, local.TryRunGit("merge-base", "--is-ancestor", theirs, "HEAD"));
+            Assert.AreEqual("mine\n", local.Read("g.txt"));
+            Assert.AreEqual("theirs\n", local.Read("f.txt"));
+            if (strategy == UpdateStrategy.Rebase)
+            {
+                Assert.AreEqual(theirs, local.RunGit("rev-parse", "HEAD~1"));
+            }
+            else
+            {
+                Assert.AreEqual(0, local.TryRunGit("rev-parse", "-q", "--verify", "HEAD^2"));
+            }
         }
 
         [Test]
