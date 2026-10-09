@@ -179,6 +179,56 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void FileHistory_FollowsMovesAndTakesMetaOnlyChangesOnlyWithTheMeta()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("Assets/x [1].prefab", "a\n");
+            repo.Write("Assets/x [1].prefab.meta", "guid: 1\n");
+            repo.CommitAll("create");
+            repo.Write("Assets/x [1].prefab.meta", "guid: 1\nimport: 2\n");
+            repo.CommitAll("import settings");
+            Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Sub"));
+            repo.RunGit("mv", "Assets/x [1].prefab", "Assets/Sub/x [1].prefab");
+            repo.RunGit("mv", "Assets/x [1].prefab.meta", "Assets/Sub/x [1].prefab.meta");
+            repo.RunGit("commit", "-q", "-m", "move");
+            repo.Write("other.txt", "o\n");
+            repo.CommitAll("other");
+            repo.Write("Assets/Sub/x [1].prefab", "a\nb\n");
+            repo.CommitAll("edit");
+            var git = repo.Git;
+
+            var withMeta = git.HistoryPaths("Assets/Sub/x [1].prefab", withMeta: true);
+            var alone = git.HistoryPaths("Assets/Sub/x [1].prefab", withMeta: false);
+
+            Assert.IsTrue(withMeta.Result.IsSuccess, withMeta.Result.Message);
+            CollectionAssert.AreEquivalent(new[]
+            {
+                "Assets/Sub/x [1].prefab", "Assets/Sub/x [1].prefab.meta", "Assets/x [1].prefab", "Assets/x [1].prefab.meta"
+            }, withMeta.Paths);
+            CollectionAssert.AreEqual(new[] { "edit", "move", "import settings", "create" },
+                git.ReadLogPage(null, 0, 10, withMeta.Paths).Commits.Select(commit => commit.Subject));
+            CollectionAssert.AreEqual(new[] { "edit", "move", "create" },
+                git.ReadLogPage(null, 0, 10, alone.Paths).Commits.Select(commit => commit.Subject));
+        }
+
+        [Test]
+        public void FileHistory_MarksUnpushedCommits()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.Write("f.txt", "local\n");
+            local.CommitAll("local f");
+            local.Write("g.txt", "g\n");
+            local.CommitAll("other");
+            var git = local.Git;
+
+            var history = git.ReadLogPage(null, 0, 10, git.HistoryPaths("f.txt", withMeta: false).Paths);
+
+            CollectionAssert.AreEqual(new[] { "local f", "base" }, history.Commits.Select(commit => commit.Subject));
+            CollectionAssert.AreEqual(new[] { false, true }, history.Commits.Select(commit => commit.IsPushed));
+        }
+
+        [Test]
         public void ReadLogPage_BeforeTheFirstCommit_IsEmpty()
         {
             using var repo = TestRepository.Create();

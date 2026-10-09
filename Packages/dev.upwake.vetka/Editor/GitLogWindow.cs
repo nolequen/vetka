@@ -26,13 +26,50 @@ namespace Upwake.Vetka
         private List<GitFileChange> _files;
         private string _selectedFile;
         private Vector2 _filesScrollPos;
+        private string _historyFile;
+        private bool _historyWithMeta;
+        [NonSerialized] private List<string> _historyPaths;
 
-        public static void ShowWindow(Git git)
+        public static void ShowWindow(Git git) => Open(git, null, false, "Git log");
+
+        public static void ShowHistory(Git git, string file, bool withMeta) =>
+            Open(git, file, withMeta, $"History: {System.IO.Path.GetFileName(file)}");
+
+        private static void Open(Git git, string file, bool withMeta, string title)
         {
-            var window = GetWindow<GitLogWindow>(utility: false, "Git log");
+            var window = Resources.FindObjectsOfTypeAll<GitLogWindow>()
+                .FirstOrDefault(candidate => candidate._historyFile == file && candidate._historyWithMeta == withMeta);
+            if (window == null)
+            {
+                window = CreateInstance<GitLogWindow>();
+                window._historyFile = file;
+                window._historyWithMeta = withMeta;
+                window.titleContent = new GUIContent(title);
+            }
+
             window._git = git;
             window.minSize = new Vector2(520, 300);
+            window.Show();
+            window.Focus();
             window.Refresh();
+        }
+
+        private static ((GitResult Result, List<GitCommit> Commits, string Head) Log, string Branch, List<string> Paths)
+            ReadHistory(Git git, string file, bool withMeta, int count)
+        {
+            List<string> paths = null;
+            if (file != null)
+            {
+                var history = git.HistoryPaths(file, withMeta);
+                if (!history.Result.IsSuccess)
+                {
+                    return ((history.Result, new List<GitCommit>(), null), null, null);
+                }
+
+                paths = history.Paths;
+            }
+
+            return (git.ReadLogPage(null, 0, count, paths), git.CurrentBranch(), paths);
         }
 
         private void OnEnable() => GitOperations.RepositoryChanged += Refresh;
@@ -54,9 +91,11 @@ namespace Upwake.Vetka
 
             var git = _git;
             var count = Math.Max(PageSize, (_commits?.Count ?? 0) + (_loadingMore ? PageSize : 0));
+            var file = _historyFile;
+            var withMeta = _historyWithMeta;
             GitOperations.Read(
-                "Git: reading the log",
-                () => (log: git.ReadLogPage(null, 0, count), branch: git.CurrentBranch()),
+                file == null ? "Git: reading the log" : "Git: reading the file history",
+                () => ReadHistory(git, file, withMeta, count),
                 state =>
                 {
                     if (!this)
@@ -65,20 +104,21 @@ namespace Upwake.Vetka
                     }
 
                     _loading = false;
-                    if (!state.log.Result.IsSuccess)
+                    if (!state.Log.Result.IsSuccess)
                     {
                         _commits = null;
                         _head = null;
-                        _aborted = state.log.Result.Message;
+                        _aborted = state.Log.Result.Message;
                         Repaint();
                         return;
                     }
 
-                    _commits = state.log.Commits;
-                    _head = state.log.Head;
+                    _commits = state.Log.Commits;
+                    _head = state.Log.Head;
+                    _historyPaths = state.Paths;
                     _hasMore = _commits.Count == count;
                     _moreAborted = null;
-                    _branch = state.branch;
+                    _branch = state.Branch;
 
                     if (_selected != null && _commits.Any(commit => commit.Hash == _selected))
                     {
@@ -121,7 +161,8 @@ namespace Upwake.Vetka
             var git = _git ??= new Git();
             var head = _head;
             var skip = _commits.Count;
-            GitOperations.Read("Git: reading older commits", () => git.ReadLogPage(head, skip, PageSize), page =>
+            var paths = _historyPaths;
+            GitOperations.Read("Git: reading older commits", () => git.ReadLogPage(head, skip, PageSize, paths), page =>
             {
                 if (!this)
                 {
@@ -129,7 +170,7 @@ namespace Upwake.Vetka
                 }
 
                 _loadingMore = false;
-                if (_commits != null && _head == head && _commits.Count == skip)
+                if (_commits != null && _head == head && _historyPaths == paths && _commits.Count == skip)
                 {
                     if (page.Result.IsSuccess)
                     {
@@ -169,7 +210,11 @@ namespace Upwake.Vetka
                     return;
                 }
 
-                _files = files;
+                var own = _historyPaths == null
+                    ? files
+                    : files.Where(file => _historyPaths.Contains(file.Path) ||
+                                          file.OldPath != null && _historyPaths.Contains(file.OldPath)).ToList();
+                _files = own.Count > 0 ? own : files;
                 if (!_files.Exists(file => file.Path == _selectedFile))
                 {
                     _selectedFile = null;
@@ -196,7 +241,7 @@ namespace Upwake.Vetka
                 Refresh();
             }
 
-            EditorGUILayout.LabelField(_branch ?? "?", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(_historyFile ?? _branch ?? "?", EditorStyles.boldLabel);
 
             DrawCommits();
             DrawFiles();
@@ -216,7 +261,7 @@ namespace Upwake.Vetka
 
             if (_commits.Count == 0)
             {
-                EditorGUILayout.LabelField("No commits yet");
+                EditorGUILayout.LabelField(_historyFile == null ? "No commits yet" : "No commits change this file");
                 return;
             }
 
@@ -363,18 +408,25 @@ namespace Upwake.Vetka
 
             EditorGUILayout.BeginHorizontal();
 
-            using (new EditorGUI.DisabledScope(_loading || _busy || !hasCommits))
+            if (_historyFile == null)
             {
-                if (GUILayout.Button("Amend last commit..."))
+                using (new EditorGUI.DisabledScope(_loading || _busy || !hasCommits))
                 {
-                    EditorApplication.delayCall += () => AmendCommitWindow.ShowWindow(new Git(), OnAmended);
-                }
+                    if (GUILayout.Button("Amend last commit..."))
+                    {
+                        EditorApplication.delayCall += () => AmendCommitWindow.ShowWindow(new Git(), OnAmended);
+                    }
 
-                if (GUILayout.Button("Undo last commit") && !_busy)
-                {
-                    _busy = true;
-                    EditorApplication.delayCall += () => UndoLastCommit(head);
+                    if (GUILayout.Button("Undo last commit") && !_busy)
+                    {
+                        _busy = true;
+                        EditorApplication.delayCall += () => UndoLastCommit(head);
+                    }
                 }
+            }
+            else
+            {
+                GUILayout.FlexibleSpace();
             }
 
             using (new EditorGUI.DisabledScope(_loading))

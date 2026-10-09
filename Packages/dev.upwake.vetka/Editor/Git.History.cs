@@ -204,7 +204,24 @@ namespace Upwake.Vetka
             return (page.Result, page.Commits);
         }
 
-        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count)
+        public (GitResult Result, List<string> Paths) HistoryPaths(string path, bool withMeta)
+        {
+            var names = Run("log", "--follow", "--name-only", "-z", "--format=", "--", ":(top,literal)" + path);
+            if (!names.IsSuccess)
+            {
+                return (names, new List<string>());
+            }
+
+            var paths = new[] { path }
+                .Concat(NulSeparated(names.Output).Select(name => name.Trim('\n', '\r')))
+                .Where(name => name.Length > 0)
+                .Distinct()
+                .ToList();
+            return (names, withMeta ? paths.SelectMany(name => new[] { name, name + ".meta" }).Distinct().ToList() : paths);
+        }
+
+        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count,
+            IReadOnlyCollection<string> paths = null)
         {
             var none = new List<GitCommit>();
             if (head == null)
@@ -219,14 +236,19 @@ namespace Upwake.Vetka
                 head = resolved.Output;
             }
 
-            var result = Run("log", "--skip=" + skip, "-n", count.ToString(),
-                "--pretty=format:%h%x1f%an%x1f%ad%x1f%s", "--date=short", head, "--");
+            var result = Run(new[]
+                {
+                    "log", "--skip=" + skip, "-n", count.ToString(), "--pretty=format:%h%x1f%an%x1f%ad%x1f%s",
+                    "--date=short", head
+                }
+                .Concat(PathFilter(paths))
+                .ToArray());
             if (!result.IsSuccess)
             {
                 return (result, none, head);
             }
 
-            var outgoing = new HashSet<string>(OutgoingCommitHashes(head, skip + count));
+            var outgoing = new HashSet<string>(OutgoingCommitHashes(head, skip + count, paths));
 
             return (result, result.Output
                 .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
@@ -324,18 +346,22 @@ namespace Upwake.Vetka
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList();
         }
 
-        private IEnumerable<string> OutgoingCommitHashes(string tip, int limit)
+        private IEnumerable<string> OutgoingCommitHashes(string tip, int limit, IReadOnlyCollection<string> paths)
         {
-            var result = OutgoingLog("--pretty=format:%h", limit, tip);
+            var result = OutgoingLog("--pretty=format:%h", limit, tip, paths);
             return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
                 ? Enumerable.Empty<string>()
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
-        private GitResult OutgoingLog(string format, int limit, string tip) =>
+        private GitResult OutgoingLog(string format, int limit, string tip, IReadOnlyCollection<string> paths = null) =>
             Run(new[] { "log" }.Concat(OutgoingRange(PushTarget(), tip))
                 .Concat(new[] { format, "-n", limit.ToString() })
+                .Concat(PathFilter(paths))
                 .ToArray());
+
+        private static IEnumerable<string> PathFilter(IReadOnlyCollection<string> paths) =>
+            new[] { "--" }.Concat(paths?.Select(path => ":(top,literal)" + path) ?? Enumerable.Empty<string>());
 
         private static IEnumerable<string> OutgoingRange(GitPushTarget? target, string tip)
         {

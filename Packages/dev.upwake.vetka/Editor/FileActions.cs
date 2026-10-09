@@ -11,13 +11,14 @@ namespace Upwake.Vetka
         internal sealed class Target
         {
             public Target(List<GitFileChange> selected, List<GitFileChange> changes, string file,
-                GitFileChange? fileChange, bool busy)
+                GitFileChange? fileChange, bool busy, bool fromProject = false)
             {
                 Selected = selected;
                 Changes = changes;
                 File = file;
                 FileChange = fileChange;
                 Busy = busy;
+                FromProject = fromProject;
             }
 
             public List<GitFileChange> Selected { get; }
@@ -25,6 +26,7 @@ namespace Upwake.Vetka
             public string File { get; }
             public GitFileChange? FileChange { get; }
             public bool Busy { get; }
+            public bool FromProject { get; }
 
             public List<GitFileChange> Untracked =>
                 Changes.Where(change => change.Status == GitStatus.Untracked).ToList();
@@ -49,6 +51,7 @@ namespace Upwake.Vetka
         }
 
         private const string ShowDiffName = "Show Diff";
+        private const string ShowHistoryName = "Show History";
         private const string BlameName = "Blame";
         private const string AddName = "Add to Git";
         private const string RollbackName = "Rollback...";
@@ -63,6 +66,14 @@ namespace Upwake.Vetka
                 Name = ShowDiffName,
                 IsEnabled = target => target.FileChange.HasValue,
                 Run = target => ShowDiff(target.FileChange.Value)
+            },
+            new Item
+            {
+                Name = ShowHistoryName,
+                IsEnabled = target => target.File != null && (!target.FileChange.HasValue ||
+                                                              target.FileChange.Value.Status != GitStatus.Untracked &&
+                                                              target.FileChange.Value.Status != GitStatus.Added),
+                Run = target => GitLogWindow.ShowHistory(new Git(), HistoryPath(target), target.FromProject)
             },
             new Item
             {
@@ -205,7 +216,25 @@ namespace Upwake.Vetka
                 fileChange = meta;
             }
 
-            return new Target(selected, list, file, fileChange, false);
+            return new Target(selected, list, file, fileChange, false, fromProject: true);
+        }
+
+        internal static string HistoryPath(Target target)
+        {
+            if (!target.FileChange.HasValue || target.FileChange.Value.OldPath == null)
+            {
+                return target.File;
+            }
+
+            var change = target.FileChange.Value;
+            if (change.Path == target.File)
+            {
+                return change.OldPath;
+            }
+
+            return change.Path == target.File + ".meta" && change.OldPath.EndsWith(".meta")
+                ? change.OldPath.Substring(0, change.OldPath.Length - ".meta".Length)
+                : target.File;
         }
 
         private static string MetaPair(string path) =>
@@ -293,25 +322,31 @@ namespace Upwake.Vetka
         [MenuItem(ProjectMenu + ShowDiffName, true)]
         private static bool CanProjectShowDiff() => CanRunFromProject(ShowDiffName);
 
-        [MenuItem(ProjectMenu + BlameName, false, ProjectMenuPriority + 1)]
+        [MenuItem(ProjectMenu + ShowHistoryName, false, ProjectMenuPriority + 1)]
+        private static void ProjectShowHistory() => RunFromProject(ShowHistoryName);
+
+        [MenuItem(ProjectMenu + ShowHistoryName, true)]
+        private static bool CanProjectShowHistory() => CanRunFromProject(ShowHistoryName);
+
+        [MenuItem(ProjectMenu + BlameName, false, ProjectMenuPriority + 2)]
         private static void ProjectBlame() => RunFromProject(BlameName);
 
         [MenuItem(ProjectMenu + BlameName, true)]
         private static bool CanProjectBlame() => CanRunFromProject(BlameName);
 
-        [MenuItem(ProjectMenu + AddName, false, ProjectMenuPriority + 2)]
+        [MenuItem(ProjectMenu + AddName, false, ProjectMenuPriority + 3)]
         private static void ProjectAdd() => RunFromProject(AddName);
 
         [MenuItem(ProjectMenu + AddName, true)]
         private static bool CanProjectAdd() => CanRunFromProject(AddName);
 
-        [MenuItem(ProjectMenu + RollbackName, false, ProjectMenuPriority + 3)]
+        [MenuItem(ProjectMenu + RollbackName, false, ProjectMenuPriority + 4)]
         private static void ProjectRollback() => RunFromProject(RollbackName);
 
         [MenuItem(ProjectMenu + RollbackName, true)]
         private static bool CanProjectRollback() => CanRunFromProject(RollbackName);
 
-        [MenuItem(ProjectMenu + CreatePatchName, false, ProjectMenuPriority + 4)]
+        [MenuItem(ProjectMenu + CreatePatchName, false, ProjectMenuPriority + 5)]
         private static void ProjectCreatePatch() => RunFromProject(CreatePatchName);
 
         [MenuItem(ProjectMenu + CreatePatchName, true)]

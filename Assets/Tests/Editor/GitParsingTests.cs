@@ -47,6 +47,24 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void HistoryPath_StartsFromTheNameTheFileHasInHistory()
+        {
+            FileActions.Target Target(string file, GitFileChange? change, bool project) =>
+                new FileActions.Target(new List<GitFileChange>(), new List<GitFileChange>(), file, change, false,
+                    project);
+
+            Assert.AreEqual("a.cs", FileActions.HistoryPath(Target("a.cs", null, true)));
+            Assert.AreEqual("a.cs", FileActions.HistoryPath(Target("a.cs",
+                new GitFileChange(GitStatus.Modified, "a.cs.meta"), true)));
+            Assert.AreEqual("old/a.cs", FileActions.HistoryPath(Target("new/a.cs",
+                new GitFileChange(GitStatus.Renamed, "new/a.cs", "old/a.cs"), false)));
+            Assert.AreEqual("old/a.cs", FileActions.HistoryPath(Target("new/a.cs",
+                new GitFileChange(GitStatus.Renamed, "new/a.cs.meta", "old/a.cs.meta"), true)));
+            Assert.AreEqual("old/a.cs.meta", FileActions.HistoryPath(Target("new/a.cs.meta",
+                new GitFileChange(GitStatus.Renamed, "new/a.cs.meta", "old/a.cs.meta"), false)));
+        }
+
+        [Test]
         public void Settings_AreAPreferencesPageFoundByGitWords()
         {
             var provider = GitSettingsProvider.Create();
