@@ -135,6 +135,62 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void ReadLogPage_PagesFromTheHeadItStartedAt()
+        {
+            using var repo = TestRepository.Create();
+            for (var i = 1; i <= 5; i++)
+            {
+                repo.Write("a.txt", $"{i}\n");
+                repo.CommitAll($"commit {i}");
+            }
+
+            var git = repo.Git;
+            var first = git.ReadLogPage(null, 0, 2);
+            repo.Write("a.txt", "later\n");
+            repo.CommitAll("made later");
+            var second = git.ReadLogPage(first.Head, 2, 2);
+            var third = git.ReadLogPage(first.Head, 4, 2);
+
+            Assert.IsTrue(first.Result.IsSuccess, first.Result.Message);
+            Assert.AreEqual(repo.RunGit("rev-parse", "HEAD~1"), first.Head);
+            CollectionAssert.AreEqual(new[] { "commit 5", "commit 4" }, first.Commits.Select(commit => commit.Subject));
+            CollectionAssert.AreEqual(new[] { "commit 3", "commit 2" }, second.Commits.Select(commit => commit.Subject));
+            CollectionAssert.AreEqual(new[] { "commit 1" }, third.Commits.Select(commit => commit.Subject));
+        }
+
+        [Test]
+        public void ReadLogPage_MarksUnpushedCommitsOnEveryPage()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            for (var i = 1; i <= 3; i++)
+            {
+                local.Write("f.txt", $"{i}\n");
+                local.CommitAll($"local {i}");
+            }
+
+            var git = local.Git;
+            var first = git.ReadLogPage(null, 0, 2);
+            var second = git.ReadLogPage(first.Head, 2, 2);
+
+            CollectionAssert.AreEqual(new[] { false, false }, first.Commits.Select(commit => commit.IsPushed));
+            CollectionAssert.AreEqual(new[] { "local 1", "base" }, second.Commits.Select(commit => commit.Subject));
+            CollectionAssert.AreEqual(new[] { false, true }, second.Commits.Select(commit => commit.IsPushed));
+        }
+
+        [Test]
+        public void ReadLogPage_BeforeTheFirstCommit_IsEmpty()
+        {
+            using var repo = TestRepository.Create();
+
+            var page = repo.Git.ReadLogPage(null, 0, 10);
+
+            Assert.IsTrue(page.Result.IsSuccess, page.Result.Message);
+            Assert.AreEqual(0, page.Commits.Count);
+            Assert.IsNull(page.Head);
+        }
+
+        [Test]
         public void Push_BranchCreatedFromARemoteBranch_GoesToItsOwnName()
         {
             using var remote = TestRepository.CreateBare();

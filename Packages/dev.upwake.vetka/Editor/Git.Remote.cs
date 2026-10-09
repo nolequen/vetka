@@ -96,7 +96,7 @@ namespace Upwake.Vetka
             }
 
             var target = found.Value;
-            var outgoing = Run(new[] { "rev-list", "--count" }.Concat(OutgoingRange(target)).ToArray());
+            var outgoing = Run(new[] { "rev-list", "--count" }.Concat(OutgoingRange(target, "HEAD")).ToArray());
             var count = outgoing.IsSuccess && int.TryParse(outgoing.Output, out var parsed) ? parsed : 0;
 
             var arguments = new List<string> { "push", "--progress" };

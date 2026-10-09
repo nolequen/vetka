@@ -8,16 +8,20 @@ namespace Upwake.Vetka
 {
     internal class GitLogWindow : EditorWindow
     {
-        private const int Limit = 50;
+        private const int PageSize = 100;
         private const float FilesHeight = 140;
 
         [NonSerialized] private Git _git;
         private List<GitCommit> _commits;
+        private string _head;
+        private bool _hasMore;
         private string _branch;
         private Vector2 _scrollPos;
         [NonSerialized] private bool _loading;
+        [NonSerialized] private bool _loadingMore;
         [NonSerialized] private bool _busy;
         [NonSerialized] private string _aborted;
+        [NonSerialized] private string _moreAborted;
         private string _selected;
         private List<GitFileChange> _files;
         private string _selectedFile;
@@ -49,9 +53,10 @@ namespace Upwake.Vetka
             _aborted = null;
 
             var git = _git;
+            var count = Math.Max(PageSize, (_commits?.Count ?? 0) + (_loadingMore ? PageSize : 0));
             GitOperations.Read(
                 "Git: reading the log",
-                () => (log: git.ReadLog(Limit), branch: git.CurrentBranch()),
+                () => (log: git.ReadLogPage(null, 0, count), branch: git.CurrentBranch()),
                 state =>
                 {
                     if (!this)
@@ -63,14 +68,17 @@ namespace Upwake.Vetka
                     if (!state.log.Result.IsSuccess)
                     {
                         _commits = null;
+                        _head = null;
                         _aborted = state.log.Result.Message;
                         Repaint();
                         return;
                     }
 
                     _commits = state.log.Commits;
+                    _head = state.log.Head;
+                    _hasMore = _commits.Count == count;
+                    _moreAborted = null;
                     _branch = state.branch;
-                    _loading = false;
 
                     if (_selected != null && _commits.Any(commit => commit.Hash == _selected))
                     {
@@ -99,6 +107,53 @@ namespace Upwake.Vetka
                     Repaint();
                 }
             );
+        }
+
+        private void LoadMore()
+        {
+            if (_loading || _loadingMore || !_hasMore || _head == null || _commits == null)
+            {
+                return;
+            }
+
+            _loadingMore = true;
+            _moreAborted = null;
+            var git = _git ??= new Git();
+            var head = _head;
+            var skip = _commits.Count;
+            GitOperations.Read("Git: reading older commits", () => git.ReadLogPage(head, skip, PageSize), page =>
+            {
+                if (!this)
+                {
+                    return;
+                }
+
+                _loadingMore = false;
+                if (_commits != null && _head == head && _commits.Count == skip)
+                {
+                    if (page.Result.IsSuccess)
+                    {
+                        _commits.AddRange(page.Commits);
+                        _hasMore = page.Commits.Count == PageSize;
+                    }
+                    else
+                    {
+                        _moreAborted = page.Result.Message;
+                    }
+                }
+
+                Repaint();
+            }, reason =>
+            {
+                if (!this)
+                {
+                    return;
+                }
+
+                _loadingMore = false;
+                _moreAborted = reason;
+                Repaint();
+            });
         }
 
         private void Select(string hash)
@@ -165,35 +220,73 @@ namespace Upwake.Vetka
                 return;
             }
 
-            foreach (var commit in _commits)
+            var rowHeight = EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
+            var rows = _commits.Count + (_hasMore ? 1 : 0);
+            var area = GUILayoutUtility.GetRect(0, rows * rowHeight, GUILayout.ExpandWidth(true));
+            var first = Mathf.Max(0, (int)(_scrollPos.y / rowHeight));
+            var last = Mathf.Min(rows, first + (int)(position.height / rowHeight) + 2);
+            for (var i = first; i < last; i++)
             {
-                var row = EditorGUILayout.BeginHorizontal();
-                var current = Event.current;
-                if (current.type == EventType.MouseDown && (current.button == 0 || current.button == 1) &&
-                    row.Contains(current.mousePosition))
+                var rect = new Rect(area.x, area.y + i * rowHeight, area.width, EditorGUIUtility.singleLineHeight);
+                if (i < _commits.Count)
                 {
-                    if (commit.Hash != _selected)
-                    {
-                        Select(commit.Hash);
-                    }
+                    DrawCommit(_commits[i], rect);
+                }
+                else
+                {
+                    DrawMore(rect);
+                }
+            }
+        }
 
-                    current.Use();
-                    Repaint();
+        private void DrawCommit(GitCommit commit, Rect rect)
+        {
+            var current = Event.current;
+            if (current.type == EventType.MouseDown && (current.button == 0 || current.button == 1) &&
+                rect.Contains(current.mousePosition))
+            {
+                if (commit.Hash != _selected)
+                {
+                    Select(commit.Hash);
                 }
 
-                if (current.type == EventType.Repaint && commit.Hash == _selected)
+                current.Use();
+                Repaint();
+            }
+
+            if (current.type == EventType.Repaint && commit.Hash == _selected)
+            {
+                EditorGUI.DrawRect(rect, GitColors.Selection);
+            }
+
+            var style = commit.IsPushed
+                ? EditorStyles.label
+                : GitColors.TextStyle(EditorStyles.label, GitColors.Unpushed);
+            GUI.Label(new Rect(rect.x, rect.y, 60, rect.height), commit.Hash, style);
+            GUI.Label(new Rect(rect.x + 64, rect.y, 80, rect.height), commit.Date, style);
+            GUI.Label(new Rect(rect.x + 148, rect.y, 110, rect.height), commit.Author, style);
+            GUI.Label(new Rect(rect.x + 262, rect.y, Mathf.Max(0, rect.width - 262), rect.height), commit.Subject,
+                style);
+        }
+
+        private void DrawMore(Rect rect)
+        {
+            if (_moreAborted == null)
+            {
+                GUI.Label(rect, "Loading older commits...", EditorStyles.centeredGreyMiniLabel);
+                if (Event.current.type == EventType.Repaint)
                 {
-                    EditorGUI.DrawRect(row, GitColors.Selection);
+                    LoadMore();
                 }
 
-                var style = commit.IsPushed
-                    ? EditorStyles.label
-                    : GitColors.TextStyle(EditorStyles.label, GitColors.Unpushed);
-                EditorGUILayout.LabelField(commit.Hash, style, GUILayout.Width(60));
-                EditorGUILayout.LabelField(commit.Date, style, GUILayout.Width(80));
-                EditorGUILayout.LabelField(commit.Author, style, GUILayout.Width(110));
-                EditorGUILayout.LabelField(commit.Subject, style);
-                EditorGUILayout.EndHorizontal();
+                return;
+            }
+
+            EditorGUIUtility.AddCursorRect(rect, MouseCursor.Link);
+            if (GUI.Button(rect, $"{_moreAborted}, click to load older commits", EditorStyles.centeredGreyMiniLabel))
+            {
+                _moreAborted = null;
+                LoadMore();
             }
         }
 

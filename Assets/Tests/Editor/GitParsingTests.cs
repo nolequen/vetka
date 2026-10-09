@@ -30,8 +30,8 @@ namespace Upwake.Vetka.Tests
         {
             var transient = new HashSet<string>
             {
-                "_git", "_loading", "_loaded", "_pushing", "_committing", "_busy", "_amendRequested",
-                "_closing", "_aborted", "_focused"
+                "_git", "_loading", "_loadingMore", "_loaded", "_pushing", "_committing", "_busy", "_amendRequested",
+                "_closing", "_aborted", "_moreAborted", "_focused"
             };
             var windows = typeof(Git).Assembly.GetTypes()
                 .Where(type => typeof(UnityEditor.EditorWindow).IsAssignableFrom(type));

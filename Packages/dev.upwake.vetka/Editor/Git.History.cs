@@ -200,16 +200,33 @@ namespace Upwake.Vetka
 
         public (GitResult Result, List<GitCommit> Commits) ReadLog(int limit = 50)
         {
-            var result = Run(
-                "log", "-n", limit.ToString(), "--pretty=format:%h%x1f%an%x1f%ad%x1f%s", "--date=short"
-            );
-            if (!result.IsSuccess)
+            var page = ReadLogPage(null, 0, limit);
+            return (page.Result, page.Commits);
+        }
+
+        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count)
+        {
+            var none = new List<GitCommit>();
+            if (head == null)
             {
-                var unborn = Run("rev-parse", "--git-dir").IsSuccess && !HasHead();
-                return (unborn ? GitResult.Success("") : result, new List<GitCommit>());
+                var resolved = Run("rev-parse", "-q", "--verify", "HEAD^{commit}");
+                if (!resolved.IsSuccess)
+                {
+                    var repository = Run("rev-parse", "--git-dir");
+                    return (repository.IsSuccess ? GitResult.Success("") : repository, none, null);
+                }
+
+                head = resolved.Output;
             }
 
-            var outgoing = new HashSet<string>(OutgoingCommitHashes(limit));
+            var result = Run("log", "--skip=" + skip, "-n", count.ToString(),
+                "--pretty=format:%h%x1f%an%x1f%ad%x1f%s", "--date=short", head, "--");
+            if (!result.IsSuccess)
+            {
+                return (result, none, head);
+            }
+
+            var outgoing = new HashSet<string>(OutgoingCommitHashes(head, skip + count));
 
             return (result, result.Output
                 .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
@@ -217,7 +234,7 @@ namespace Upwake.Vetka
                 .Where(fields => fields.Length == 4)
                 .Select(fields => new GitCommit(fields[0], fields[1], fields[2], fields[3],
                     !outgoing.Contains(fields[0])))
-                .ToList());
+                .ToList(), head);
         }
 
         public string LastCommitMessage()
@@ -301,34 +318,35 @@ namespace Upwake.Vetka
 
         public List<string> OutgoingCommits(int limit = 50)
         {
-            var result = OutgoingLog("--pretty=format:%h %s", limit);
+            var result = OutgoingLog("--pretty=format:%h %s", limit, "HEAD");
             return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
                 ? new List<string>()
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList();
         }
 
-        private IEnumerable<string> OutgoingCommitHashes(int limit)
+        private IEnumerable<string> OutgoingCommitHashes(string tip, int limit)
         {
-            var result = OutgoingLog("--pretty=format:%h", limit);
+            var result = OutgoingLog("--pretty=format:%h", limit, tip);
             return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
                 ? Enumerable.Empty<string>()
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
-        private GitResult OutgoingLog(string format, int limit) =>
-            Run(new[] { "log" }.Concat(OutgoingRange(PushTarget())).Concat(new[] { format, "-n", limit.ToString() })
+        private GitResult OutgoingLog(string format, int limit, string tip) =>
+            Run(new[] { "log" }.Concat(OutgoingRange(PushTarget(), tip))
+                .Concat(new[] { format, "-n", limit.ToString() })
                 .ToArray());
 
-        private static IEnumerable<string> OutgoingRange(GitPushTarget? target)
+        private static IEnumerable<string> OutgoingRange(GitPushTarget? target, string tip)
         {
             if (!target.HasValue)
             {
-                return new[] { "HEAD", "--not", "--remotes" };
+                return new[] { tip, "--not", "--remotes" };
             }
 
             return target.Value.Exists
-                ? new[] { $"{target.Value.TrackingRef}..HEAD" }
-                : new[] { "HEAD", "--not", $"--remotes={target.Value.Remote}" };
+                ? new[] { $"{target.Value.TrackingRef}..{tip}" }
+                : new[] { tip, "--not", $"--remotes={target.Value.Remote}" };
         }
     }
 }
