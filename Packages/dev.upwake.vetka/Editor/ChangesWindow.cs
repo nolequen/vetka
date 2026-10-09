@@ -31,6 +31,7 @@ namespace Upwake.Vetka
         [NonSerialized] private Git _git;
         private Vector2 _filesScrollPos = Vector2.up;
         [SerializeField] private string _message = "";
+        [NonSerialized] private string _pendingMessage;
         [SerializeField] private float _messageHeight = 60;
         [NonSerialized] private float _dragOffset;
         [NonSerialized] private string _aborted;
@@ -550,8 +551,21 @@ namespace Upwake.Vetka
             EditorApplication.delayCall += () => FileActions.ShowDiff(change);
         }
 
+        private void SetMessage(string message)
+        {
+            _pendingMessage = message;
+            Repaint();
+        }
+
         private void DrawMessage()
         {
+            if (_pendingMessage != null)
+            {
+                _message = _pendingMessage;
+                _pendingMessage = null;
+                GUIUtility.keyboardControl = 0;
+            }
+
             var rect = GUILayoutUtility.GetRect(GUIContent.none, MessageStyle,
                 GUILayout.Height(MessageHeight(_messageHeight)), GUILayout.ExpandWidth(true));
             var historyRect = new Rect(rect.xMax - 20, rect.y + 2, 18, 18);
@@ -589,12 +603,7 @@ namespace Upwake.Vetka
             foreach (var message in messages)
             {
                 var chosen = message;
-                menu.AddItem(new GUIContent(MenuText(message)), false, () =>
-                {
-                    _message = chosen;
-                    GUIUtility.keyboardControl = 0;
-                    Repaint();
-                });
+                menu.AddItem(new GUIContent(MenuText(message)), false, () => SetMessage(chosen));
             }
 
             menu.DropDown(anchor);
@@ -728,8 +737,7 @@ namespace Upwake.Vetka
 
                     if (committed && _message == message)
                     {
-                        _message = "";
-                        GUIUtility.keyboardControl = 0;
+                        SetMessage("");
                     }
 
                     Repaint();
