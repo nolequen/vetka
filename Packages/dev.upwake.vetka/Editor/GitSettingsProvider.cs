@@ -32,10 +32,33 @@ namespace Upwake.Vetka
                     .Concat(new[] { "git", "merge", "rebase", "branch", "status", "logging" }))
             {
                 label = "Vetka",
-                guiHandler = _ => Draw()
+                guiHandler = _ => Draw(),
+                deactivateHandler = () =>
+                {
+                    ApplyDraft();
+                    _draft = null;
+                }
             };
 
+        private const string PathControl = "VetkaGitPath";
+
+        private static string _draft;
+
         private static string GitPathOf(string text) => (text ?? "").Trim().Trim('"').Trim();
+
+        private static void ApplyDraft()
+        {
+            if (_draft == null)
+            {
+                return;
+            }
+
+            var path = GitPathOf(_draft);
+            if (path != GitSettings.GitPath)
+            {
+                SetGitPath(path);
+            }
+        }
 
         private static void Draw()
         {
@@ -59,25 +82,37 @@ namespace Upwake.Vetka
         {
             using (new EditorGUILayout.HorizontalScope())
             {
-                var path = GitPathOf(EditorGUILayout.DelayedTextField(Styles.GitPath, GitSettings.GitPath));
-                if (path != GitSettings.GitPath)
+                _draft ??= GitSettings.GitPath;
+                var current = Event.current;
+                var editing = GUI.GetNameOfFocusedControl() == PathControl;
+                if (editing && current.type == EventType.KeyDown &&
+                    (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter))
                 {
-                    SetGitPath(path);
+                    ApplyDraft();
                 }
+                else if (!editing)
+                {
+                    ApplyDraft();
+                    _draft = GitSettings.GitPath;
+                }
+
+                GUI.SetNextControlName(PathControl);
+                _draft = EditorGUILayout.TextField(Styles.GitPath, _draft);
 
                 if (GUILayout.Button("Browse", GUILayout.Width(75)))
                 {
                     var selected = EditorUtility.OpenFilePanel("Select Git Executable", "", "exe");
                     if (!string.IsNullOrEmpty(selected))
                     {
-                        SetGitPath(GitPathOf(selected));
-                        GUI.FocusControl(null);
+                        GUIUtility.keyboardControl = 0;
+                        _draft = GitPathOf(selected);
+                        ApplyDraft();
                     }
                 }
 
                 if (GUILayout.Button("Test", GUILayout.Width(75)))
                 {
-                    var git = new Git(GitSettings.GitPath);
+                    var git = new Git(GitPathOf(_draft));
                     GitOperations.Read(
                         "Git: checking the executable",
                         () => git.Version(),

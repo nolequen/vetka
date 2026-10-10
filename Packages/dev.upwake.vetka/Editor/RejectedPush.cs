@@ -30,7 +30,7 @@ namespace Upwake.Vetka
 
         private static UpdateStrategy? Choose(string message)
         {
-            var question = $"{message}\n\nUpdate the project with the new commits and push again?";
+            var question = $"{message}\n\nBring those commits into your branch and push again?";
             var strategy = GitSettings.UpdateStrategyValue;
             if (strategy != UpdateStrategy.Ask)
             {

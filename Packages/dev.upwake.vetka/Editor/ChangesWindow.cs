@@ -34,6 +34,7 @@ namespace Upwake.Vetka
         [NonSerialized] private string _pendingMessage;
         [SerializeField] private float _messageHeight = 60;
         [NonSerialized] private float _dragOffset;
+        [NonSerialized] private int _splitterId;
         [NonSerialized] private string _aborted;
         [NonSerialized] private bool _committing;
         [NonSerialized] private bool _pushing;
@@ -271,6 +272,7 @@ namespace Upwake.Vetka
 
         private void OnGUI()
         {
+            _splitterId = GUIUtility.GetControlID(FocusType.Passive);
             if (_changes == null && _aborted == null)
             {
                 if (ProjectStatus.Loaded)
@@ -390,7 +392,7 @@ namespace Upwake.Vetka
             EditorGUI.DrawRect(new Rect(area.x, area.y + 4, area.width, 1), SeparatorColor);
             EditorGUIUtility.AddCursorRect(area, MouseCursor.ResizeVertical);
 
-            var id = GUIUtility.GetControlID(FocusType.Passive);
+            var id = _splitterId;
             var current = Event.current;
             switch (current.GetTypeForControl(id))
             {
@@ -553,6 +555,7 @@ namespace Upwake.Vetka
 
         private void SetMessage(string message)
         {
+            _message = message;
             _pendingMessage = message;
             Repaint();
         }

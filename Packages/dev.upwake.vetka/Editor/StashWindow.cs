@@ -11,6 +11,7 @@ namespace Upwake.Vetka
         private List<GitStash> _stashes;
         private string _selected;
         private string _message = "";
+        [NonSerialized] private string _pendingMessage;
         private bool _includeUntracked;
         private Vector2 _scrollPos;
         [NonSerialized] private bool _loading;
@@ -108,6 +109,13 @@ namespace Upwake.Vetka
             EditorGUILayout.LabelField("Stash local changes", EditorStyles.boldLabel);
 
             EditorGUILayout.BeginHorizontal();
+            if (_pendingMessage != null)
+            {
+                _message = _pendingMessage;
+                _pendingMessage = null;
+                GUIUtility.keyboardControl = 0;
+            }
+
             _message = EditorGUILayout.TextField(_message);
             using (new EditorGUI.DisabledScope(_loading || _busy))
             {
@@ -222,10 +230,10 @@ namespace Upwake.Vetka
                 if (this)
                 {
                     _busy = false;
-                    if (result.IsSuccess)
+                    if (result.IsSuccess && _message == message)
                     {
                         _message = "";
-                        GUIUtility.keyboardControl = 0;
+                        _pendingMessage = "";
                     }
 
                     Refresh();

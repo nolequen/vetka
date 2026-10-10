@@ -21,6 +21,8 @@ namespace Upwake.Vetka
         {
             "-c", "core.quotepath=false",
             "-c", "log.showSignature=false",
+            "-c", "log.follow=false",
+            "-c", "log.showRoot=true",
             "-c", "diff.relative=false",
             "-c", "diff.noprefix=false",
             "-c", "i18n.logOutputEncoding=UTF-8",

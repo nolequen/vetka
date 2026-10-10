@@ -197,8 +197,8 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("edit");
             var git = repo.Git;
 
-            var withMeta = git.HistoryPaths("Assets/Sub/x [1].prefab", withMeta: true);
-            var alone = git.HistoryPaths("Assets/Sub/x [1].prefab", withMeta: false);
+            var withMeta = git.FileHistory(repo.Head, "Assets/Sub/x [1].prefab", withMeta: true);
+            var alone = git.FileHistory(repo.Head, "Assets/Sub/x [1].prefab", withMeta: false);
 
             Assert.IsTrue(withMeta.Result.IsSuccess, withMeta.Result.Message);
             CollectionAssert.AreEquivalent(new[]
@@ -206,9 +206,573 @@ namespace Upwake.Vetka.Tests
                 "Assets/Sub/x [1].prefab", "Assets/Sub/x [1].prefab.meta", "Assets/x [1].prefab", "Assets/x [1].prefab.meta"
             }, withMeta.Paths);
             CollectionAssert.AreEqual(new[] { "edit", "move", "import settings", "create" },
-                git.ReadLogPage(null, 0, 10, withMeta.Paths).Commits.Select(commit => commit.Subject));
-            CollectionAssert.AreEqual(new[] { "edit", "move", "create" },
-                git.ReadLogPage(null, 0, 10, alone.Paths).Commits.Select(commit => commit.Subject));
+                Subjects(git, withMeta.Commits, withMeta.Unpushed));
+            CollectionAssert.AreEqual(new[] { "edit", "move", "create" }, Subjects(git, alone.Commits, alone.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_LeavesOutAnotherFileThatTookAnOldName()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("x [1].txt", "x\n");
+            repo.CommitAll("create x");
+            repo.RunGit("mv", "x [1].txt", "y [1].txt");
+            repo.RunGit("commit", "-q", "-m", "rename to y");
+            repo.Write("x [1].txt", "another x\n");
+            repo.CommitAll("recreate x");
+            repo.Write("x [1].txt", "another x edited\n");
+            repo.CommitAll("edit new x");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "y [1].txt", withMeta: true);
+
+            Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
+            CollectionAssert.AreEqual(new[] { "rename to y", "create x" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_DoesNotTakeTheHistoryOfAnotherAssetsSimilarMeta()
+        {
+            using var repo = TestRepository.Create();
+            const string importer = "fileFormatVersion: 2\nTextureImporter:\n  mipmaps: 1\n  filterMode: 1\n" +
+                                    "  wrapMode: 0\n  maxTextureSize: 2048\n  compression: 1\n  sprite: 0\n";
+            repo.Write("Assets/a.png", "first picture with its own bytes\n");
+            repo.Write("Assets/a.png.meta", "guid: 1111\n" + importer);
+            repo.CommitAll("add a");
+            repo.Write("Assets/a.png.meta", "guid: 1111\n" + importer + "  readable: 1\n");
+            repo.CommitAll("a readable");
+            repo.Delete("Assets/a.png");
+            repo.Delete("Assets/a.png.meta");
+            repo.Write("Assets/b.png", "a completely different second image\n");
+            repo.Write("Assets/b.png.meta", "guid: 2222\n" + importer + "  readable: 1\n");
+            repo.CommitAll("replace a with b");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/b.png", withMeta: true);
+
+            Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
+            CollectionAssert.AreEqual(new[] { "replace a with b" }, Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FileHistory_ShowsMergesThatChangeTheFile(bool withMeta)
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("f.txt", "1\n2\n3\n");
+            repo.CommitAll("start");
+            repo.RunGit("switch", "-q", "-c", "side");
+            repo.Write("f.txt", "1\n2\n3\nside\n");
+            repo.CommitAll("side edit");
+            repo.RunGit("switch", "-q", "main");
+            repo.Write("f.txt", "main\n1\n2\n3\n");
+            repo.CommitAll("main edit");
+            repo.RunGit("merge", "-q", "--no-ff", "-m", "merge side", "side");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "f.txt", withMeta);
+            var subjects = Subjects(git, history.Commits, history.Unpushed).ToList();
+
+            Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
+            Assert.AreEqual("merge side", subjects[0]);
+            CollectionAssert.AreEquivalent(new[] { "merge side", "main edit", "side edit", "start" }, subjects);
+        }
+
+        [Test]
+        public void ReadCommits_ReadsALongListInParts()
+        {
+            using var repo = TestRepository.Create();
+            for (var i = 1; i <= 5; i++)
+            {
+                repo.Write("a.txt", $"{i}\n");
+                repo.CommitAll($"commit {i}");
+            }
+
+            var git = repo.Git;
+            var history = git.FileHistory(repo.Head, "a.txt", withMeta: false);
+            var previous = Git.CommitsPerRead;
+            Git.CommitsPerRead = 2;
+            try
+            {
+                CollectionAssert.AreEqual(new[] { "commit 5", "commit 4", "commit 3", "commit 2", "commit 1" },
+                    Subjects(git, history.Commits, history.Unpushed));
+            }
+            finally
+            {
+                Git.CommitsPerRead = previous;
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FileHistory_KeepsEditsMadeOnABranchThatMovedTheFile(bool withMeta)
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("Assets/x.prefab", "a\n");
+            repo.Write("Assets/x.prefab.meta", "guid: 1\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.RunGit("switch", "-q", "-c", "feature");
+            Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Sub"));
+            repo.RunGit("mv", "Assets/x.prefab", "Assets/Sub/x.prefab");
+            repo.RunGit("mv", "Assets/x.prefab.meta", "Assets/Sub/x.prefab.meta");
+            CommitAt(repo, 2, "commit", "-q", "-m", "move");
+            repo.Write("Assets/Sub/x.prefab", "a\nfeature\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "edit on feature");
+            repo.RunGit("switch", "-q", "main");
+            repo.Write("other.txt", "o\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 4, "commit", "-q", "-m", "unrelated on main");
+            CommitAt(repo, 5, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+            repo.Write("Assets/Sub/x.prefab", "a\nfeature\nmain\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 6, "commit", "-q", "-m", "edit on main");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/Sub/x.prefab", withMeta);
+            var subjects = Subjects(git, history.Commits, history.Unpushed).ToList();
+
+            Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
+            Assert.AreEqual("edit on main", subjects[0]);
+            CollectionAssert.AreEquivalent(
+                new[] { "edit on main", "edit on feature", "move", "create" }, subjects);
+        }
+
+        [Test]
+        public void FileHistory_WithMeta_ShowsTheSideEditInsteadOfAMergeThatOnlyBroughtIt()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("f.txt", "1\n");
+            repo.CommitAll("start");
+            repo.RunGit("switch", "-q", "-c", "side");
+            repo.Write("f.txt", "1\nside\n");
+            repo.CommitAll("side edit");
+            repo.RunGit("switch", "-q", "main");
+            repo.Write("other.txt", "o\n");
+            repo.CommitAll("unrelated");
+            repo.RunGit("merge", "-q", "--no-ff", "-m", "merge side", "side");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "f.txt", withMeta: true);
+
+            Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
+            CollectionAssert.AreEqual(new[] { "side edit", "start" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_DoesNotWanderToASimilarFileAtABackMerge()
+        {
+            using var repo = TestRepository.Create();
+            const string prefab = "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Unit\n  m_Layer: 0\n" +
+                                  "  m_TagString: Untagged\n  m_IsActive: 1\n";
+            repo.Write("readme.txt", "r\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "root");
+            repo.RunGit("branch", "feature");
+            repo.Write("Assets/asset.prefab", prefab);
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "create asset");
+            repo.RunGit("switch", "-q", "-c", "s1");
+            repo.Write("Assets/asset.prefab", prefab + "  edited: 1\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "edit on s1");
+            repo.RunGit("switch", "-q", "main");
+            CommitAt(repo, 4, "merge", "-q", "--no-ff", "-m", "merge s1", "s1");
+            repo.RunGit("switch", "-q", "feature");
+            repo.Write("Assets/sim.prefab", prefab.Replace("Unit", "Other"));
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 5, "commit", "-q", "-m", "create sim");
+            CommitAt(repo, 6, "merge", "-q", "--no-ff", "-m", "back merge", "main");
+            repo.RunGit("switch", "-q", "main");
+            CommitAt(repo, 7, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/asset.prefab", withMeta: true);
+
+            Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
+            CollectionAssert.AreEquivalent(new[] { "edit on s1", "create asset" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_KeepsAMergeThatSyncedTheRenamingBranch()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("f.txt", "1\n2\n3\n4\n5\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create f");
+            repo.RunGit("switch", "-q", "-c", "feature");
+            repo.RunGit("mv", "f.txt", "g.txt");
+            CommitAt(repo, 2, "commit", "-q", "-m", "rename to g");
+            repo.RunGit("switch", "-q", "main");
+            repo.Write("f.txt", "1\n2\n3\n4\n5\nmain\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "edit f on main");
+            repo.RunGit("switch", "-q", "feature");
+            CommitAt(repo, 4, "merge", "-q", "--no-ff", "-m", "sync main", "main");
+            repo.Write("g.txt", "0\n1\n2\n3\n4\n5\nmain\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 5, "commit", "-q", "-m", "edit g");
+            repo.RunGit("switch", "-q", "main");
+            CommitAt(repo, 6, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "g.txt", withMeta: false);
+
+            Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
+            CollectionAssert.AreEquivalent(
+                new[] { "edit g", "sync main", "rename to g", "create f" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_IgnoresTheUsersLogFollowSetting()
+        {
+            using var repo = TestRepository.Create();
+            repo.RunGit("config", "log.follow", "true");
+            repo.Write("x.txt", "1\n2\n3\n");
+            repo.CommitAll("create x");
+            repo.RunGit("mv", "x.txt", "y.txt");
+            repo.RunGit("commit", "-q", "-m", "x to y");
+            repo.Write("y.txt", "1\n2\n3\n4\n");
+            repo.CommitAll("edit y");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "y.txt", withMeta: false);
+
+            CollectionAssert.AreEqual(new[] { "edit y", "x to y", "create x" },
+                Subjects(git, history.Commits, history.Unpushed));
+            CollectionAssert.AreEquivalent(new[] { "y.txt", "x.txt" }, history.Paths);
+        }
+
+        [Test]
+        public void FileHistory_DoesNotJoinAReplacedAssetWithAnotherGuid()
+        {
+            using var repo = TestRepository.Create();
+            const string material = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!21 &2100000\nMaterial:\n" +
+                                    "  serializedVersion: 8\n  m_ObjectHideFlags: 0\n  m_Shader: {fileID: 46}\n" +
+                                    "  m_ShaderKeywords: \n  m_LightmapFlags: 4\n  m_EnableInstancingVariants: 0\n" +
+                                    "  m_DoubleSidedGI: 0\n  m_CustomRenderQueue: -1\n";
+            const string importer = "NativeFormatImporter:\n  externalObjects: {}\n  mainObjectFileID: 2100000\n" +
+                                    "  userData: \n  assetBundleName: \n  assetBundleVariant: \n";
+            repo.Write("Assets/Rock.mat", material + "  m_Name: Rock\n");
+            repo.Write("Assets/Rock.mat.meta", "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\n" + importer);
+            repo.CommitAll("add rock");
+            repo.Write("Assets/Rock.mat", material + "  m_Name: Rock\n  m_Color: 1\n");
+            repo.CommitAll("tweak rock");
+            repo.Delete("Assets/Rock.mat");
+            repo.Delete("Assets/Rock.mat.meta");
+            repo.Write("Assets/Grass.mat", material + "  m_Name: Grass\n  m_Color: 1\n");
+            repo.Write("Assets/Grass.mat.meta", "fileFormatVersion: 2\nguid: 22222222222222222222222222222222\n" + importer);
+            repo.CommitAll("replace rock with grass");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/Grass.mat", withMeta: true);
+
+            CollectionAssert.AreEqual(new[] { "replace rock with grass" }, Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_FollowsTheMetaWhenTheAssetWasRewrittenOnTheMove()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("Assets/x.asset", "alpha\nbeta\ngamma\ndelta\nepsilon\n");
+            repo.Write("Assets/x.asset.meta", "fileFormatVersion: 2\nguid: 33333333333333333333333333333333\n");
+            repo.CommitAll("create");
+            Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "New"));
+            repo.RunGit("mv", "Assets/x.asset", "Assets/New/x.asset");
+            repo.RunGit("mv", "Assets/x.asset.meta", "Assets/New/x.asset.meta");
+            repo.Write("Assets/New/x.asset", "one\ntwo\nthree\nfour\nfive\nsix\n");
+            repo.CommitAll("move and rewrite");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/New/x.asset", withMeta: true);
+
+            CollectionAssert.AreEqual(new[] { "move and rewrite", "create" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_KeepsTheMiddleOfARenameRoundTripInOrder()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("x.txt", "1\n2\n3\n4\n5\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create x");
+            repo.RunGit("mv", "x.txt", "y.txt");
+            CommitAt(repo, 2, "commit", "-q", "-m", "x to y");
+            repo.Write("y.txt", "1\n2\n3\n4\n5\n6\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "edit y");
+            repo.RunGit("mv", "y.txt", "x.txt");
+            CommitAt(repo, 4, "commit", "-q", "-m", "y to x");
+            repo.Write("x.txt", "1\n2\n3\n4\n5\n6\n7\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 5, "commit", "-q", "-m", "edit x");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "x.txt", withMeta: false);
+
+            CollectionAssert.AreEqual(new[] { "edit x", "y to x", "edit y", "x to y", "create x" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_FollowsAnExactMoveWhoseMetaWasRegenerated()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("Assets/Player.cs", "class Player\n{\n    int health;\n}\n");
+            repo.Write("Assets/Player.cs.meta", "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.Write("Assets/Player.cs", "class Player\n{\n    int health;\n    int mana;\n}\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "edit");
+            Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Scripts"));
+            repo.RunGit("mv", "Assets/Player.cs", "Assets/Scripts/Player.cs");
+            repo.Delete("Assets/Player.cs.meta");
+            repo.Write("Assets/Scripts/Player.cs.meta", "fileFormatVersion: 2\nguid: 55555555555555555555555555555555\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "move");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/Scripts/Player.cs", withMeta: true);
+
+            CollectionAssert.AreEqual(new[] { "move", "edit", "create" }, Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_DoesNotJoinAFileDeletedInAnEarlierCommit()
+        {
+            using var repo = TestRepository.Create();
+            const string settings = "%YAML 1.1\n--- !u!1 &1\nSettings:\n  a: 1\n  b: 2\n  c: 3\n  d: 4\n  e: 5\n";
+            repo.Write("ProjectSettings/OldSettings.asset", settings);
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create old");
+            repo.Write("ProjectSettings/OldSettings.asset", settings + "  g: 7\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "tweak old");
+            repo.RunGit("switch", "-q", "-c", "side");
+            repo.RunGit("rm", "-q", "ProjectSettings/OldSettings.asset");
+            CommitAt(repo, 3, "commit", "-q", "-m", "delete old");
+            repo.Write("ProjectSettings/NewSettings.asset", settings + "  g: 7\n  f: 6\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 4, "commit", "-q", "-m", "create new");
+            repo.RunGit("switch", "-q", "main");
+            repo.Write("readme.txt", "r\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 5, "commit", "-q", "-m", "unrelated on main");
+            CommitAt(repo, 6, "merge", "-q", "--no-ff", "-m", "merge side", "side");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "ProjectSettings/NewSettings.asset", withMeta: false);
+
+            CollectionAssert.AreEqual(new[] { "create new" }, Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_IgnoresTheUsersLogShowRootSetting()
+        {
+            using var repo = TestRepository.Create();
+            repo.RunGit("config", "log.showRoot", "false");
+            repo.Write("a.txt", "1\n2\n3\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create a");
+            repo.Write("other.txt", "o\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "unrelated");
+            repo.RunGit("mv", "a.txt", "b.txt");
+            CommitAt(repo, 3, "commit", "-q", "-m", "a to b");
+            repo.Write("b.txt", "1\n2\n3\n4\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 4, "commit", "-q", "-m", "edit b");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "b.txt", withMeta: false);
+
+            CollectionAssert.AreEqual(new[] { "edit b", "a to b", "create a" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_FollowsARenameWhenTheSameCommitAddsACopy()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("build.sh", "a\nb\nc\nd\ne\nf\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.Write("build.sh", "a\nb\nc\nd\ne\nf\ng\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "edit");
+            repo.Write("build-ios.sh", "a\nb\nc\nd\ne\nf\ng\n");
+            repo.RunGit("mv", "build.sh", "build-android.sh");
+            repo.Write("build-android.sh", "a\nb\nc\nd\ne\nf\nandroid\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "split");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "build-android.sh", withMeta: false);
+
+            CollectionAssert.AreEqual(new[] { "split", "edit", "create" }, Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_FollowsTheMovedCopyNotADeletedTwin()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("Assets/UI/Icons/close.png", "the same icon bytes\n");
+            repo.Write("Assets/UI/Icons/close.png.meta", "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\n");
+            repo.Write("Assets/Art/close.png", "the same icon bytes\n");
+            repo.Write("Assets/Art/close.png.meta", "fileFormatVersion: 2\nguid: 22222222bbbbbbbbbbbbbbbbbbbbbbbb\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "add both");
+            repo.Write("Assets/UI/Icons/close.png.meta",
+                "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\nTextureImporter:\n  readable: 1\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "tweak ui icon");
+            repo.Write("Assets/Art/close.png.meta",
+                "fileFormatVersion: 2\nguid: 22222222bbbbbbbbbbbbbbbbbbbbbbbb\nTextureImporter:\n  sprite: 1\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "tweak art icon");
+            Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Common"));
+            repo.RunGit("mv", "Assets/UI/Icons/close.png", "Assets/Common/close.png");
+            repo.RunGit("mv", "Assets/UI/Icons/close.png.meta", "Assets/Common/close.png.meta");
+            repo.RunGit("rm", "-q", "Assets/Art/close.png", "Assets/Art/close.png.meta");
+            CommitAt(repo, 4, "commit", "-q", "-m", "dedupe");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/Common/close.png", withMeta: true);
+
+            CollectionAssert.AreEqual(new[] { "dedupe", "tweak ui icon", "add both" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_PrefersTheMetaMatchOverATwinWithoutAMeta()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("Assets/Art/close.png", "the same icon bytes\n");
+            repo.Write("Assets/UI/Icons/close.png", "the same icon bytes\n");
+            repo.Write("Assets/UI/Icons/close.png.meta", "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "add both");
+            repo.Write("Assets/UI/Icons/close.png.meta",
+                "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\nTextureImporter:\n  readable: 1\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "tweak ui icon");
+            repo.Write("Assets/Art/close.png", "the same icon bytes\n\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "touch art icon");
+            repo.Write("Assets/Art/close.png", "the same icon bytes\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 4, "commit", "-q", "-m", "restore art icon");
+            Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Common"));
+            repo.RunGit("mv", "Assets/UI/Icons/close.png", "Assets/Common/close.png");
+            repo.RunGit("mv", "Assets/UI/Icons/close.png.meta", "Assets/Common/close.png.meta");
+            repo.RunGit("rm", "-q", "Assets/Art/close.png");
+            CommitAt(repo, 5, "commit", "-q", "-m", "dedupe");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "Assets/Common/close.png", withMeta: true);
+
+            CollectionAssert.AreEqual(new[] { "dedupe", "tweak ui icon", "add both" },
+                Subjects(git, history.Commits, history.Unpushed));
+        }
+
+        [Test]
+        public void FileHistory_FindsTheRenameAmongDeletedFilesReadInParts()
+        {
+            using var repo = TestRepository.Create();
+            for (var i = 1; i <= 4; i++)
+            {
+                repo.Write($"Old/file{i}.txt", $"file {i}\nline a{i}\nline b{i}\nline c{i}\nline d{i}\n");
+            }
+
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.Write("Old/file3.txt", "file 3\nline a3\nline b3\nline c3\nline d3\nline e3\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "edit file3");
+            repo.RunGit("rm", "-q", "-r", "Old");
+            repo.Write("New/moved.txt", "file 3\nline a3\nline b3\nline c3\nline d3\nline e3\nline f3\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 3, "commit", "-q", "-m", "move and edit");
+            var git = repo.Git;
+            var previous = Git.PathCharactersPerRead;
+            Git.PathCharactersPerRead = 1;
+            try
+            {
+                var history = git.FileHistory(repo.Head, "New/moved.txt", withMeta: false);
+
+                CollectionAssert.AreEqual(new[] { "move and edit", "edit file3", "create" },
+                    Subjects(git, history.Commits, history.Unpushed));
+            }
+            finally
+            {
+                Git.PathCharactersPerRead = previous;
+            }
+        }
+
+        [Test]
+        public void FileHistory_StopsReadingDeletedFilesOnceTheGuidConfirmsTheRename()
+        {
+            using var repo = TestRepository.Create();
+            for (var i = 1; i <= 3; i++)
+            {
+                repo.Write($"Assets/Old/Unit{i}.cs", $"class Unit{i}\n{{\n    int a{i};\n    int b{i};\n    int c{i};\n}}\n");
+                repo.Write($"Assets/Old/Unit{i}.cs.meta",
+                    $"fileFormatVersion: 2\nguid: {new string((char)('0' + i), 32)}\n");
+            }
+
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.RunGit("mv", "Assets/Old", "Assets/New");
+            repo.Write("Assets/New/Unit2.cs", "class Unit2\n{\n    int a2;\n    int b2;\n    int c2;\n    int d2;\n}\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "move and edit");
+            var git = repo.Git;
+            var renameReads = 0;
+            git.BeforeCommand = arguments =>
+            {
+                if (arguments.Contains("-M"))
+                {
+                    renameReads++;
+                }
+            };
+            var previous = Git.PathCharactersPerRead;
+            Git.PathCharactersPerRead = 1;
+            try
+            {
+                var history = git.FileHistory(repo.Head, "Assets/New/Unit2.cs", withMeta: true);
+
+                Assert.AreEqual(1, renameReads);
+                CollectionAssert.AreEqual(new[] { "move and edit", "create" },
+                    Subjects(git, history.Commits, history.Unpushed));
+            }
+            finally
+            {
+                Git.PathCharactersPerRead = previous;
+            }
+        }
+
+        [Test]
+        public void FileHistory_DoesNotFollowACopyOfAFileThatStays()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "1\n2\n3\n4\n5\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 1, "commit", "-q", "-m", "create a");
+            repo.Write("b.txt", "1\n2\n3\n4\n5\n");
+            repo.RunGit("add", "-A");
+            CommitAt(repo, 2, "commit", "-q", "-m", "copy to b");
+            var git = repo.Git;
+
+            var history = git.FileHistory(repo.Head, "b.txt", withMeta: false);
+
+            CollectionAssert.AreEqual(new[] { "copy to b" }, Subjects(git, history.Commits, history.Unpushed));
         }
 
         [Test]
@@ -222,11 +786,26 @@ namespace Upwake.Vetka.Tests
             local.CommitAll("other");
             var git = local.Git;
 
-            var history = git.ReadLogPage(null, 0, 10, git.HistoryPaths("f.txt", withMeta: false).Paths);
+            var history = git.FileHistory(local.Head, "f.txt", withMeta: false);
+            var commits = git.ReadCommits(history.Commits, history.Unpushed).Commits;
 
-            CollectionAssert.AreEqual(new[] { "local f", "base" }, history.Commits.Select(commit => commit.Subject));
-            CollectionAssert.AreEqual(new[] { false, true }, history.Commits.Select(commit => commit.IsPushed));
+            CollectionAssert.AreEqual(new[] { "local f", "base" }, commits.Select(commit => commit.Subject));
+            CollectionAssert.AreEqual(new[] { false, true }, commits.Select(commit => commit.IsPushed));
         }
+
+        private static void CommitAt(TestRepository repo, int second, params string[] arguments)
+        {
+            var date = $"2026-01-01T00:00:{second:00}Z";
+            var (exitCode, output, error) = repo.RunGitWith(new Dictionary<string, string>
+            {
+                ["GIT_AUTHOR_DATE"] = date,
+                ["GIT_COMMITTER_DATE"] = date
+            }, arguments);
+            Assert.AreEqual(0, exitCode, $"git {string.Join(" ", arguments)} failed:\n{error}\n{output}");
+        }
+
+        private static IEnumerable<string> Subjects(Git git, List<string> hashes, HashSet<string> unpushed) =>
+            git.ReadCommits(hashes, unpushed).Commits.Select(commit => commit.Subject);
 
         [Test]
         public void ReadLogPage_BeforeTheFirstCommit_IsEmpty()
@@ -615,7 +1194,7 @@ namespace Upwake.Vetka.Tests
             Assert.IsFalse(result.IsSuccess);
             Assert.IsTrue(result.IsRejected);
             Assert.AreEqual("1 file committed: mine, but the push failed\n" +
-                            "Push rejected: the remote has new commits, update the project first", result.Message);
+                            "Push rejected: origin/main has commits that main does not have", result.Message);
             Assert.AreEqual("mine", local.RunGit("log", "-1", "--format=%s"));
         }
 
@@ -683,7 +1262,7 @@ namespace Upwake.Vetka.Tests
             var result = repo.GitWithVariables(korean).DeleteBranch("missing", force: false);
 
             Assert.IsFalse(result.IsSuccess);
-            Assert.AreEqual("branch 'missing' not found", result.Message);
+            StringAssert.StartsWith("branch 'missing' not found", result.Message);
         }
 
         [Test]
@@ -761,7 +1340,195 @@ namespace Upwake.Vetka.Tests
 
             Assert.IsFalse(result.IsSuccess);
             Assert.IsTrue(result.IsRejected);
-            Assert.AreEqual("Push rejected: the remote has new commits, update the project first", result.Message);
+            Assert.AreEqual("Push rejected: origin/main has commits that main does not have", result.Message);
+        }
+
+        [Test]
+        public void UpdateAndPush_OnABranchMadeFromMain_TakesItsOwnRemoteBranch()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            var git = local.Git;
+            Assert.IsTrue(git.CreateBranch("feature", "origin/main", checkout: true).IsSuccess);
+            local.Write("g.txt", "mine 1\n");
+            local.CommitAll("mine 1");
+            Assert.IsTrue(git.Push().IsSuccess);
+            upstream.RunGit("fetch", "-q");
+            upstream.RunGit("switch", "-q", "-c", "feature", "origin/feature");
+            upstream.Write("h.txt", "colleague\n");
+            upstream.CommitAll("colleague on feature");
+            upstream.RunGit("push", "-q", "origin", "feature");
+            upstream.RunGit("switch", "-q", "main");
+            upstream.Write("f.txt", "main moved\n");
+            upstream.CommitAll("main moved");
+            upstream.RunGit("push", "-q", "origin", "main");
+            local.Write("g.txt", "mine 2\n");
+            local.CommitAll("mine 2");
+            Assert.IsTrue(git.Push().IsRejected);
+
+            var result = git.UpdateAndPush(UpdateStrategy.Merge);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feature"));
+            Assert.AreEqual("colleague\n", local.Read("h.txt"));
+            Assert.AreEqual("base\n", local.Read("f.txt"));
+            Assert.AreEqual("origin/main", git.UpstreamBranch());
+        }
+
+        [Test]
+        public void UpdateAndPush_WithANarrowFetchRefspec_TakesTheBranchEveryTime()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            local.RunGit("switch", "-q", "-c", "feature");
+            local.Write("g.txt", "mine 1\n");
+            local.CommitAll("mine 1");
+            local.RunGit("push", "-q", "-u", "origin", "feature");
+            local.RunGit("config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+            local.RunGit("update-ref", "-d", "refs/remotes/origin/feature");
+            var git = local.Git;
+
+            for (var round = 1; round <= 2; round++)
+            {
+                upstream.RunGit("fetch", "-q");
+                upstream.RunGit("switch", "-q", "-C", "feature", "origin/feature");
+                upstream.Write("h.txt", $"colleague {round}\n");
+                upstream.CommitAll($"colleague {round}");
+                upstream.RunGit("push", "-q", "origin", "feature");
+                local.Write("g.txt", $"mine {round + 1}\n");
+                local.CommitAll($"mine {round + 1}");
+                Assert.IsTrue(git.Push().IsRejected, $"round {round}");
+
+                var result = git.UpdateAndPush(UpdateStrategy.Merge);
+
+                Assert.IsTrue(result.IsSuccess, $"round {round}: {result.Message}");
+                Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feature"), $"round {round}");
+                Assert.AreEqual($"colleague {round}\n", local.Read("h.txt"), $"round {round}");
+            }
+        }
+
+        [Test]
+        public void UpdateAndPush_WhenTheFetchFails_ReportsTheFetchError()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            var git = local.Git;
+            Assert.IsTrue(git.Push().IsRejected);
+            var mine = local.Head;
+            local.RunGit("config", "remote.origin.url", Path.Combine(remote.BaseDirectory, "missing.git"));
+
+            var result = git.UpdateAndPush(UpdateStrategy.Merge);
+
+            Assert.IsFalse(result.IsSuccess);
+            StringAssert.DoesNotStartWith("Push rejected", result.Message);
+            Assert.AreEqual(mine, local.Head);
+        }
+
+        [Test]
+        public void ForcePush_ToABranchDeletedOnTheRemote_SaysSoAndForgetsIt()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("switch", "-q", "-c", "feature");
+            local.Write("f.txt", "one\n");
+            local.CommitAll("one");
+            local.Write("f.txt", "two\n");
+            local.CommitAll("two");
+            local.RunGit("push", "-q", "-u", "origin", "feature");
+            var git = local.Git;
+            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
+            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
+            remote.RunGit("branch", "-D", "feature");
+
+            var result = git.Push(seen.Tracked, seen.Head);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("Force push stopped: origin/feature no longer exists on the remote, push again to create it",
+                result.Message);
+            Assert.IsFalse(git.PushTarget().Value.Exists);
+        }
+
+        [Test]
+        public void UpdateAndPush_WhenTheRemoteBranchWasDeleted_SaysSoAndPushesIt()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            local.RunGit("switch", "-q", "-c", "feature");
+            local.Write("g.txt", "mine 1\n");
+            local.CommitAll("mine 1");
+            local.RunGit("push", "-q", "-u", "origin", "feature");
+            upstream.RunGit("fetch", "-q");
+            upstream.RunGit("switch", "-q", "-c", "feature", "origin/feature");
+            upstream.Write("h.txt", "colleague\n");
+            upstream.CommitAll("colleague");
+            upstream.RunGit("push", "-q", "origin", "feature");
+            local.RunGit("fetch", "-q");
+            local.Write("g.txt", "mine 2\n");
+            local.CommitAll("mine 2");
+            var git = local.Git;
+            Assert.IsTrue(git.Push().IsRejected);
+            remote.RunGit("branch", "-D", "feature");
+
+            var result = git.UpdateAndPush(UpdateStrategy.Merge);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            StringAssert.StartsWith("Merged 1 commit from origin/feature, origin/feature no longer existed on the remote\n",
+                result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feature"));
+            Assert.AreEqual("colleague\n", local.Read("h.txt"));
+        }
+
+        [Test]
+        public void UpdateAndPush_WhenTheRemoteBranchWasDeletedAndHadNothingNew_SaysOnlyThatItWasGone()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("switch", "-q", "-c", "feature");
+            local.Write("g.txt", "mine 1\n");
+            local.CommitAll("mine 1");
+            local.RunGit("push", "-q", "-u", "origin", "feature");
+            local.Write("g.txt", "mine 2\n");
+            local.CommitAll("mine 2");
+            remote.RunGit("branch", "-D", "feature");
+            var git = local.Git;
+
+            var result = git.UpdateAndPush(UpdateStrategy.Merge);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            StringAssert.StartsWith("origin/feature no longer existed on the remote\n", result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feature"));
+        }
+
+        [Test]
+        public void UpdateAndPush_OnABranchWithoutUpstream_TakesTheRemoteBranchOfTheSameName()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            local.RunGit("branch", "--unset-upstream");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            var git = local.Git;
+            Assert.IsTrue(git.Push().IsRejected);
+
+            var result = git.UpdateAndPush(UpdateStrategy.Rebase);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
+            Assert.AreEqual("theirs\n", local.Read("f.txt"));
+            Assert.AreEqual("mine\n", local.Read("g.txt"));
         }
 
         [TestCase(UpdateStrategy.Merge)]
@@ -822,6 +1589,30 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void ForcePush_AfterTheBranchMovedSinceItWasShown_ChangesNothing()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.Write("f.txt", "one\n");
+            local.CommitAll("one");
+            local.Write("f.txt", "two\n");
+            local.CommitAll("two");
+            local.RunGit("push", "-q");
+            var git = local.Git;
+            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
+            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
+            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
+            var remoteHead = remote.RunGit("rev-parse", "main");
+
+            var result = git.Push(seen.Tracked, seen.Head);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("Force push stopped: main has changed since the Push window showed it, look at it again",
+                result.Message);
+            Assert.AreEqual(remoteHead, remote.RunGit("rev-parse", "main"));
+        }
+
+        [Test]
         public void ForcePush_ReplacesTheirCommitsWithYours()
         {
             using var remote = TestRepository.CreateBare();
@@ -865,8 +1656,10 @@ namespace Upwake.Vetka.Tests
             var result = git.Push(seen.Tracked);
 
             Assert.IsFalse(result.IsSuccess);
-            StringAssert.StartsWith("Force push rejected: origin/main has changed on the remote", result.Message);
+            Assert.AreEqual("Force push rejected: origin/main has changed on the remote since the Push window showed it. " +
+                            "The window now shows its current state, check it and try again", result.Message);
             Assert.AreEqual(remoteHead, remote.RunGit("rev-parse", "main"));
+            StringAssert.EndsWith("theirs again", git.RemoteOnlyCommits(git.PushTarget().Value).Commits[0]);
         }
 
         [Test]
@@ -896,6 +1689,7 @@ namespace Upwake.Vetka.Tests
             repo.Write("a.txt", "changed\n");
             var hanging = new HangingCommand(repo);
             repo.RunGit("config", "core.fsmonitor", hanging.Command);
+            HangingCommand.RequireWindows();
             var previous = Git.ReadingTimeout;
             Git.ReadingTimeout = TimeSpan.FromSeconds(1);
             try
@@ -1170,6 +1964,14 @@ namespace Upwake.Vetka.Tests
 
             public bool Started => File.Exists(_output);
 
+            public static void RequireWindows()
+            {
+                if (Environment.OSVersion.Platform != PlatformID.Win32NT)
+                {
+                    Assert.Ignore("Only Windows reports a file that another process holds open");
+                }
+            }
+
             public bool Running
             {
                 get
@@ -1197,6 +1999,7 @@ namespace Upwake.Vetka.Tests
 
         private static (T Result, TimeSpan Elapsed) CancelLater<T>(HangingCommand hanging, Func<T> run)
         {
+            HangingCommand.RequireWindows();
             var context = new OperationContext(null);
             var watch = Stopwatch.StartNew();
             var task = Task.Run(() => OperationContext.With(context, run));

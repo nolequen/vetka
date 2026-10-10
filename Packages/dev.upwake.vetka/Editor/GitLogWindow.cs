@@ -28,7 +28,18 @@ namespace Upwake.Vetka
         private Vector2 _filesScrollPos;
         private string _historyFile;
         private bool _historyWithMeta;
-        [NonSerialized] private List<string> _historyPaths;
+        [NonSerialized] private History _history;
+        [NonSerialized] private int _historyOffset;
+
+        private sealed class History
+        {
+            public string Head;
+            public string Branch;
+            public string Remotes;
+            public List<string> Commits;
+            public List<string> Paths;
+            public HashSet<string> Unpushed;
+        }
 
         public static void ShowWindow(Git git) => Open(git, null, false, "Git log");
 
@@ -54,23 +65,43 @@ namespace Upwake.Vetka
             window.Refresh();
         }
 
-        private static ((GitResult Result, List<GitCommit> Commits, string Head) Log, string Branch, List<string> Paths)
-            ReadHistory(Git git, string file, bool withMeta, int count)
+        private static (GitResult Result, List<GitCommit> Commits, string Head, History History, string Branch)
+            ReadFirstPage(Git git, string file, bool withMeta, int count, History cached)
         {
-            List<string> paths = null;
-            if (file != null)
+            var branch = git.CurrentBranch();
+            var head = file == null ? null : git.HeadCommit();
+            if (head == null)
             {
-                var history = git.HistoryPaths(file, withMeta);
-                if (!history.Result.IsSuccess)
-                {
-                    return ((history.Result, new List<GitCommit>(), null), null, null);
-                }
-
-                paths = history.Paths;
+                var log = git.ReadLogPage(null, 0, file == null ? count : 0);
+                return (log.Result, log.Commits, log.Head, null, branch);
             }
 
-            return (git.ReadLogPage(null, 0, count, paths), git.CurrentBranch(), paths);
+            var remotes = git.RemoteRefs();
+            var history = cached != null && cached.Head == head && cached.Remotes == remotes &&
+                          cached.Branch == branch
+                ? cached
+                : null;
+            if (history == null)
+            {
+                var read = git.FileHistory(head, file, withMeta);
+                if (!read.Result.IsSuccess)
+                {
+                    return (read.Result, new List<GitCommit>(), head, null, branch);
+                }
+
+                history = new History
+                {
+                    Head = head, Branch = branch, Remotes = remotes, Commits = read.Commits, Paths = read.Paths,
+                    Unpushed = read.Unpushed
+                };
+            }
+
+            var page = git.ReadCommits(history.Commits.Take(count).ToList(), history.Unpushed);
+            return (page.Result, page.Commits, head, history, branch);
         }
+
+        private static (GitResult Result, List<GitCommit> Commits) ToPage(
+            (GitResult Result, List<GitCommit> Commits, string Head) log) => (log.Result, log.Commits);
 
         private void OnEnable() => GitOperations.RepositoryChanged += Refresh;
 
@@ -78,7 +109,9 @@ namespace Upwake.Vetka
 
         private void OnFocus() => Refresh();
 
-        private void Refresh()
+        private void Refresh() => Refresh(false);
+
+        private void Refresh(bool force)
         {
             if (_loading)
             {
@@ -90,12 +123,14 @@ namespace Upwake.Vetka
             _aborted = null;
 
             var git = _git;
-            var count = Math.Max(PageSize, (_commits?.Count ?? 0) + (_loadingMore ? PageSize : 0));
+            var count = Math.Max(PageSize,
+                (_history != null ? _historyOffset : _commits?.Count ?? 0) + (_loadingMore ? PageSize : 0));
             var file = _historyFile;
             var withMeta = _historyWithMeta;
+            var cached = force ? null : _history;
             GitOperations.Read(
                 file == null ? "Git: reading the log" : "Git: reading the file history",
-                () => ReadHistory(git, file, withMeta, count),
+                () => ReadFirstPage(git, file, withMeta, count, cached),
                 state =>
                 {
                     if (!this)
@@ -104,19 +139,21 @@ namespace Upwake.Vetka
                     }
 
                     _loading = false;
-                    if (!state.Log.Result.IsSuccess)
+                    if (!state.Result.IsSuccess)
                     {
                         _commits = null;
                         _head = null;
-                        _aborted = state.Log.Result.Message;
+                        _history = null;
+                        _aborted = state.Result.Message;
                         Repaint();
                         return;
                     }
 
-                    _commits = state.Log.Commits;
-                    _head = state.Log.Head;
-                    _historyPaths = state.Paths;
-                    _hasMore = _commits.Count == count;
+                    _commits = state.Commits;
+                    _head = state.Head;
+                    _history = state.History;
+                    _historyOffset = _history != null ? Math.Min(count, _history.Commits.Count) : 0;
+                    _hasMore = _history != null ? _historyOffset < _history.Commits.Count : _commits.Count == count;
                     _moreAborted = null;
                     _branch = state.Branch;
 
@@ -161,8 +198,11 @@ namespace Upwake.Vetka
             var git = _git ??= new Git();
             var head = _head;
             var skip = _commits.Count;
-            var paths = _historyPaths;
-            GitOperations.Read("Git: reading older commits", () => git.ReadLogPage(head, skip, PageSize, paths), page =>
+            var history = _history;
+            var offset = _historyOffset;
+            GitOperations.Read("Git: reading older commits", () => history != null
+                ? git.ReadCommits(history.Commits.Skip(offset).Take(PageSize).ToList(), history.Unpushed)
+                : ToPage(git.ReadLogPage(head, skip, PageSize)), page =>
             {
                 if (!this)
                 {
@@ -170,12 +210,21 @@ namespace Upwake.Vetka
                 }
 
                 _loadingMore = false;
-                if (_commits != null && _head == head && _historyPaths == paths && _commits.Count == skip)
+                if (_commits != null && _head == head && _history == history && _commits.Count == skip &&
+                    _historyOffset == offset)
                 {
                     if (page.Result.IsSuccess)
                     {
                         _commits.AddRange(page.Commits);
-                        _hasMore = page.Commits.Count == PageSize;
+                        if (history != null)
+                        {
+                            _historyOffset = Math.Min(offset + PageSize, history.Commits.Count);
+                            _hasMore = _historyOffset < history.Commits.Count;
+                        }
+                        else
+                        {
+                            _hasMore = page.Commits.Count == PageSize;
+                        }
                     }
                     else
                     {
@@ -210,10 +259,11 @@ namespace Upwake.Vetka
                     return;
                 }
 
-                var own = _historyPaths == null
+                var paths = _history?.Paths;
+                var own = paths == null
                     ? files
-                    : files.Where(file => _historyPaths.Contains(file.Path) ||
-                                          file.OldPath != null && _historyPaths.Contains(file.OldPath)).ToList();
+                    : files.Where(file => paths.Contains(file.Path) ||
+                                          file.OldPath != null && paths.Contains(file.OldPath)).ToList();
                 _files = own.Count > 0 ? own : files;
                 if (!_files.Exists(file => file.Path == _selectedFile))
                 {
@@ -433,7 +483,7 @@ namespace Upwake.Vetka
             {
                 if (GUILayout.Button("Refresh"))
                 {
-                    Refresh();
+                    Refresh(true);
                 }
             }
 

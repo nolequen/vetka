@@ -51,28 +51,30 @@ namespace Upwake.Vetka
             return new GitPushTarget(chosen, branch, exists);
         }
 
-        public (string Tracked, int Count, List<string> Commits) RemoteOnlyCommits(GitPushTarget target, int limit = 50)
+        public (string Tracked, string Head, int Count, List<string> Commits) RemoteOnlyCommits(GitPushTarget target,
+            int limit = 50)
         {
             var tracked = TrackedCommit(target);
-            if (tracked == null)
+            var head = HeadCommit();
+            if (tracked == null || head == null)
             {
-                return (null, 0, new List<string>());
+                return (null, head, 0, new List<string>());
             }
 
-            var count = Run("rev-list", "--count", $"HEAD..{tracked}");
-            var log = Run("log", $"HEAD..{tracked}", "--pretty=format:%h %s", "-n", limit.ToString());
-            return (tracked,
+            var count = Run("rev-list", "--count", $"{head}..{tracked}");
+            var log = Run("log", $"{head}..{tracked}", "--pretty=format:%h %s", "-n", limit.ToString());
+            return (tracked, head,
                 count.IsSuccess && int.TryParse(count.Output, out var parsed) ? parsed : 0,
                 !log.IsSuccess || string.IsNullOrWhiteSpace(log.Output)
                     ? new List<string>()
                     : log.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList());
         }
 
-        public GitResult Push(string forceOver = null)
+        public GitResult Push(string forceOver = null, string shownHead = null)
         {
             var target = PushTarget();
             var before = target.HasValue ? TrackedCommit(target.Value) : null;
-            var result = Interruptible("Push", () => PushHead(forceOver));
+            var result = Interruptible("Push", () => PushHead(forceOver, shownHead));
             if (!result.IsCancelled || !target.HasValue)
             {
                 return result;
@@ -84,6 +86,13 @@ namespace Upwake.Vetka
                 : result;
         }
 
+        private GitResult FetchBranch(GitPushTarget target) =>
+            RunWithProgress("fetch", "--progress", "--recurse-submodules=no", "--no-auto-maintenance", target.Remote,
+                $"+refs/heads/{target.Branch}:{target.TrackingRef}");
+
+        private static bool BranchMissing(GitResult fetch) =>
+            !fetch.IsSuccess && !fetch.IsCancelled && fetch.Message.Contains("couldn't find remote ref");
+
         private static readonly Dictionary<string, string> LfsProgress =
             new Dictionary<string, string> { ["GIT_LFS_FORCE_PROGRESS"] = "1" };
 
@@ -93,7 +102,7 @@ namespace Upwake.Vetka
             return tracked.IsSuccess ? tracked.Output : null;
         }
 
-        private GitResult PushHead(string forceOver)
+        private GitResult PushHead(string forceOver, string shownHead)
         {
             var branch = CurrentBranch(out var branchError);
             if (branch == null)
@@ -117,6 +126,12 @@ namespace Upwake.Vetka
             var count = outgoing.IsSuccess && int.TryParse(outgoing.Output, out var parsed) ? parsed : 0;
             var force = forceOver != null && target.Exists;
             var removed = 0;
+            if (force && shownHead != null && HeadCommit() != shownHead)
+            {
+                return GitResult.Failure(
+                    $"Force push stopped: {branch} has changed since the Push window showed it, look at it again");
+            }
+
             if (force)
             {
                 var lost = Run("rev-list", "--count", $"HEAD..{forceOver}");
@@ -141,15 +156,25 @@ namespace Upwake.Vetka
             {
                 if (force && result.Message.Contains("[rejected]") && result.Message.Contains("stale info"))
                 {
-                    return GitResult.Failure(
-                        $"Force push rejected: {target.Name} has changed on the remote since you looked at it, " +
-                        "update the project to see the new commits");
+                    var fetched = FetchBranch(target);
+                    if (BranchMissing(fetched))
+                    {
+                        Run("update-ref", "-d", target.TrackingRef);
+                        return GitResult.Failure(
+                            $"Force push stopped: {target.Name} no longer exists on the remote, push again to create it");
+                    }
+
+                    return GitResult.Failure(fetched.IsSuccess
+                        ? $"Force push rejected: {target.Name} has changed on the remote since the Push window showed " +
+                          "it. The window now shows its current state, check it and try again"
+                        : $"Force push rejected: {target.Name} has changed on the remote, and fetching it to show " +
+                          $"the changes failed\n{fetched.Message}");
                 }
 
                 var rejected = result.Message.Contains("[rejected]") &&
                                (result.Message.Contains("fetch first") || result.Message.Contains("non-fast-forward"));
                 return rejected
-                    ? GitResult.Rejected("Push rejected: the remote has new commits, update the project first")
+                    ? GitResult.Rejected($"Push rejected: {target.Name} has commits that {branch} does not have")
                     : result;
             }
 

@@ -51,21 +51,81 @@ namespace Upwake.Vetka
 
         public GitResult UpdateAndPush(UpdateStrategy strategy)
         {
-            var update = UpdateProject(strategy);
-            if (!update.IsSuccess)
+            if (strategy == UpdateStrategy.Ask)
             {
-                return update;
+                return GitResult.Failure("No update strategy selected");
+            }
+
+            var destination = PushDestination();
+            if (!destination.Target.HasValue)
+            {
+                return GitResult.Failure(destination.Problem);
+            }
+
+            var target = destination.Target.Value;
+            var fetch = Interruptible("Update", () => FetchBranch(target));
+            if (!fetch.IsSuccess)
+            {
+                if (fetch.IsCancelled || !BranchMissing(fetch))
+                {
+                    return fetch;
+                }
+
+                var gone = $"{target.Name} no longer exists on the remote";
+                var merged = "";
+                var tracked = TrackedCommit(target);
+                if (tracked != null && !Run("merge-base", "--is-ancestor", tracked, "HEAD").IsSuccess)
+                {
+                    var integrated = Integrate(strategy, target.TrackingRef, target.Name);
+                    if (!integrated.IsSuccess)
+                    {
+                        return integrated.IsCancelled
+                            ? GitResult.Cancelled($"{gone}\n{integrated.Message}")
+                            : GitResult.Failure($"{gone}\n{integrated.Message}");
+                    }
+
+                    merged = integrated.Message + ", ";
+                }
+
+                Run("update-ref", "-d", target.TrackingRef);
+                var recreated = Push();
+                if (recreated.IsSuccess)
+                {
+                    return GitResult.Success(
+                        $"{merged}{target.Name} no longer existed on the remote\n{recreated.Message}");
+                }
+
+                return recreated.IsCancelled
+                    ? GitResult.Cancelled($"{merged}{gone}, push cancelled")
+                    : GitResult.Failure($"{merged}{gone}, but the push failed\n{recreated.Message}");
+            }
+
+            string updated = null;
+            if (TrackedCommit(target) != null)
+            {
+                var update = Integrate(strategy, target.TrackingRef, target.Name);
+                if (!update.IsSuccess)
+                {
+                    return update;
+                }
+
+                updated = update.Message;
             }
 
             var push = Push();
+            if (updated == null)
+            {
+                return push;
+            }
+
             if (push.IsSuccess)
             {
-                return GitResult.Success($"{update.Message}\n{push.Message}");
+                return GitResult.Success($"{updated}\n{push.Message}");
             }
 
             return push.IsCancelled
-                ? GitResult.Cancelled($"{update.Message}, push cancelled")
-                : GitResult.Failure($"{update.Message}, but the push failed\n{push.Message}");
+                ? GitResult.Cancelled($"{updated}, push cancelled")
+                : GitResult.Failure($"{updated}, but the push failed\n{push.Message}");
         }
 
         public GitResult Integrate(UpdateStrategy strategy, string target, string name = null)

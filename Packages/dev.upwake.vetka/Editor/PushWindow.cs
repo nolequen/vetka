@@ -15,6 +15,7 @@ namespace Upwake.Vetka
         private GitPushTarget? _target;
         [NonSerialized] private string _problem;
         [NonSerialized] private string _tracked;
+        [NonSerialized] private string _head;
         [NonSerialized] private int _remoteOnlyCount;
         [NonSerialized] private List<string> _remoteOnly;
         [NonSerialized] private bool _loading;
@@ -28,8 +29,19 @@ namespace Upwake.Vetka
             window.Refresh();
         }
 
+        private void OnEnable() => GitOperations.RepositoryChanged += Refresh;
+
+        private void OnDisable() => GitOperations.RepositoryChanged -= Refresh;
+
+        private void OnFocus() => Refresh();
+
         private void Refresh()
         {
+            if (_loading)
+            {
+                return;
+            }
+
             _git ??= new Git();
             _loading = true;
 
@@ -41,7 +53,7 @@ namespace Upwake.Vetka
                     var destination = git.PushDestination();
                     var remoteOnly = destination.Target.HasValue && destination.Target.Value.Exists
                         ? git.RemoteOnlyCommits(destination.Target.Value)
-                        : (null, 0, new List<string>());
+                        : (null, null, 0, new List<string>());
                     return (commits: git.OutgoingCommits(), local: git.CurrentBranch(), target: destination,
                         remoteOnly);
                 },
@@ -57,6 +69,7 @@ namespace Upwake.Vetka
                     _target = state.target.Target;
                     _problem = state.target.Problem;
                     _tracked = state.remoteOnly.Tracked;
+                    _head = state.remoteOnly.Head;
                     _remoteOnlyCount = state.remoteOnly.Count;
                     _remoteOnly = state.remoteOnly.Commits;
                     _loading = false;
@@ -92,8 +105,10 @@ namespace Upwake.Vetka
             {
                 EditorGUILayout.HelpBox(
                     $"{_target.Value.Name} has {Commits(_remoteOnlyCount)} that {_localBranch ?? "your branch"} does not " +
-                    "have, so Push will be rejected. Update the project to get them, or Force Push to remove them " +
-                    $"from {_target.Value.Name}.", MessageType.Warning);
+                    (_commits != null && _commits.Any()
+                        ? "have. Push will offer to merge or rebase them first, Force Push removes them from "
+                        : "have and there is nothing to push. Force Push removes them from ") +
+                    $"{_target.Value.Name}.", MessageType.Warning);
             }
 
             using (var scroll = new EditorGUILayout.ScrollViewScope(
@@ -131,7 +146,7 @@ namespace Upwake.Vetka
             {
                 if (GUILayout.Button("Push"))
                 {
-                    Push(null);
+                    Push(null, null);
                 }
             }
 
@@ -183,14 +198,14 @@ namespace Upwake.Vetka
                 return;
             }
 
-            Push(_tracked);
+            Push(_tracked, _head);
         }
 
-        private void Push(string forceOver)
+        private void Push(string forceOver, string shownHead)
         {
             _pushing = true;
             var git = _git ??= new Git();
-            GitOperations.Run(forceOver == null ? "Git: pushing" : "Git: force pushing", () => git.Push(forceOver), result =>
+            GitOperations.Run(forceOver == null ? "Git: pushing" : "Git: force pushing", () => git.Push(forceOver, shownHead), result =>
             {
                 _pushing = false;
                 if (result.IsSuccess && this)

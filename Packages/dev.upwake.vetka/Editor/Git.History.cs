@@ -204,24 +204,302 @@ namespace Upwake.Vetka
             return (page.Result, page.Commits);
         }
 
-        public (GitResult Result, List<string> Paths) HistoryPaths(string path, bool withMeta)
+        internal static int CommitsPerRead { get; set; } = 200;
+
+        public (GitResult Result, List<string> Commits, List<string> Paths, HashSet<string> Unpushed) FileHistory(
+            string head, string path, bool withMeta)
         {
-            var names = Run("log", "--follow", "--name-only", "-z", "--format=", "--", ":(top,literal)" + path);
-            if (!names.IsSuccess)
+            var found = new List<(string Hash, long Time)>();
+            var listed = new HashSet<string>();
+            var unpushed = new HashSet<string>();
+            var paths = new List<string>();
+            var target = PushTarget();
+            var anyRemote = !string.IsNullOrWhiteSpace(RemoteRefs());
+            var segments = new Queue<(string Name, string Tip)>();
+            var visited = new HashSet<(string, string)>();
+            var examined = new HashSet<(string, string)>();
+            segments.Enqueue((path, head));
+            while (segments.Count > 0 && visited.Count < MaxRenamesFollowed)
             {
-                return (names, new List<string>());
+                var (name, tip) = segments.Dequeue();
+                if (!visited.Add((name, tip)))
+                {
+                    continue;
+                }
+
+                var names = withMeta ? new[] { name, name + ".meta" } : new[] { name };
+                paths.AddRange(names);
+                var walk = Run(new[]
+                    {
+                        "log", "--full-history", "--simplify-merges", "--no-renames", "--diff-merges=first-parent",
+                        "--name-status", "-z", "--format=%x1e%H %ct %P", tip
+                    }
+                    .Concat(PathFilter(names))
+                    .ToArray());
+                if (!walk.IsSuccess)
+                {
+                    return (walk, new List<string>(), paths, unpushed);
+                }
+
+                var added = new List<string>();
+                foreach (var record in HistoryRecords(walk.Output))
+                {
+                    if (record.Parents.Length > 1 && record.Changes.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    if (listed.Add(record.Hash))
+                    {
+                        found.Add((record.Hash, record.Time));
+                    }
+
+                    if (record.Changes.Contains(("A", name)) && examined.Add((record.Hash, name)))
+                    {
+                        added.Add(record.Hash);
+                    }
+                }
+
+                if (anyRemote)
+                {
+                    var outgoing = Run(new[] { "log", "--full-history", "--format=%H" }
+                        .Concat(OutgoingRange(target, tip))
+                        .Concat(PathFilter(names))
+                        .ToArray());
+                    if (outgoing.IsSuccess)
+                    {
+                        unpushed.UnionWith(Lines(outgoing.Output));
+                    }
+                }
+
+                foreach (var hash in added)
+                {
+                    if (!Run("rev-parse", "-q", "--verify", hash + "^").IsSuccess ||
+                        Run("rev-parse", "-q", "--verify", hash + "^2").IsSuccess)
+                    {
+                        continue;
+                    }
+
+                    var source = RenameSource(hash + "^", hash, name);
+                    if (source != null)
+                    {
+                        segments.Enqueue((source, hash + "^"));
+                    }
+                }
             }
 
-            var paths = new[] { path }
-                .Concat(NulSeparated(names.Output).Select(name => name.Trim('\n', '\r')))
-                .Where(name => name.Length > 0)
-                .Distinct()
+            if (!anyRemote)
+            {
+                unpushed.UnionWith(listed);
+            }
+
+            var commits = found
+                .Select((commit, index) => (commit.Hash, commit.Time, Index: index))
+                .OrderByDescending(commit => commit.Time)
+                .ThenBy(commit => commit.Index)
+                .Select(commit => commit.Hash)
                 .ToList();
-            return (names, withMeta ? paths.SelectMany(name => new[] { name, name + ".meta" }).Distinct().ToList() : paths);
+            return (GitResult.Success(""), commits, paths.Distinct().ToList(), unpushed);
         }
 
-        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count,
-            IReadOnlyCollection<string> paths = null)
+        private const int MaxRenamesFollowed = 100;
+
+        private static IEnumerable<(string Hash, long Time, string[] Parents, List<(string Status, string Path)> Changes)>
+            HistoryRecords(string output)
+        {
+            foreach (var record in output.Split(new[] { '\u001e' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var fields = record.Split('\0').Select(field => field.Trim('\n', '\r')).ToList();
+                var header = fields[0].Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                var changes = new List<(string, string)>();
+                for (var i = 1; i + 1 < fields.Count; i += 2)
+                {
+                    changes.Add((fields[i], fields[i + 1]));
+                }
+
+                yield return (header[0], header.Length > 1 && long.TryParse(header[1], out var time) ? time : 0,
+                    header.Skip(2).ToArray(), changes);
+            }
+        }
+
+        private string RenameSource(string parent, string commit, string name)
+        {
+            var deleted = Run("diff", "--name-only", "-z", "--no-renames", "--diff-filter=D", parent, commit);
+            var sources = deleted.IsSuccess
+                ? deleted.Output.Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries)
+                : Array.Empty<string>();
+            if (sources.Length == 0)
+            {
+                return null;
+            }
+
+            var direct = RenamedFrom(parent, commit, name, sources);
+            if (direct.SameGuid == true)
+            {
+                return direct.Old;
+            }
+
+            var meta = RenamedFrom(parent, commit, name + ".meta", sources);
+            var metaSource = meta.Old != null && meta.Old.EndsWith(".meta")
+                ? meta.Old.Substring(0, meta.Old.Length - ".meta".Length)
+                : null;
+            if (metaSource != null && meta.SameGuid == true)
+            {
+                return metaSource;
+            }
+
+            if (direct.Old != null && direct.SameGuid == null)
+            {
+                return direct.Old;
+            }
+
+            if (metaSource != null && meta.SameGuid == null)
+            {
+                return metaSource;
+            }
+
+            return direct.Status == "R100" ? direct.Old : null;
+        }
+
+        internal static int PathCharactersPerRead { get; set; } = 20000;
+
+        private (string Status, string Old, bool? SameGuid) RenamedFrom(string parent, string commit, string path,
+            IEnumerable<string> deleted)
+        {
+            (string Status, string Old, bool? SameGuid) best = (null, null, false);
+            var candidates = deleted.Where(source => source.EndsWith(".meta") == path.EndsWith(".meta")).ToList();
+            var parts = PathParts(candidates.Where(source => FileName(source) == FileName(path)))
+                .Concat(PathParts(candidates.Where(source => FileName(source) != FileName(path))));
+            foreach (var part in parts)
+            {
+                if (best.Status == "R100" || best.SameGuid == true)
+                {
+                    break;
+                }
+
+                var renames = Run(new[] { "diff", "-M", "-l1000", "--name-status", "-z", parent, commit }
+                    .Concat(PathFilter(part.Prepend(path)))
+                    .ToArray());
+                if (!renames.IsSuccess)
+                {
+                    break;
+                }
+
+                var found = (best.Status, best.Old);
+                var tokens = renames.Output.Split('\0');
+                for (var i = 0; i < tokens.Length;)
+                {
+                    var status = tokens[i].Trim('\n', '\r');
+                    if (!status.StartsWith("R") && !status.StartsWith("C"))
+                    {
+                        i += 2;
+                        continue;
+                    }
+
+                    if (i + 2 < tokens.Length && status.StartsWith("R") && tokens[i + 2] == path &&
+                        (found.Old == null || RenameScore(status) > RenameScore(found.Status)))
+                    {
+                        found = (status, tokens[i + 1]);
+                    }
+
+                    i += 3;
+                }
+
+                if (found.Old != best.Old)
+                {
+                    best = (found.Status, found.Old, SameGuid(parent, found.Old, commit, path));
+                }
+            }
+
+            return best;
+        }
+
+        private static int RenameScore(string status) =>
+            int.TryParse(status.Substring(1), out var score) ? score : 0;
+
+        private static string FileName(string path) => path.Substring(path.LastIndexOf('/') + 1);
+
+        private static IEnumerable<List<string>> PathParts(IEnumerable<string> paths)
+        {
+            var part = new List<string>();
+            var length = 0;
+            foreach (var path in paths)
+            {
+                if (part.Count > 0 && length + path.Length > PathCharactersPerRead)
+                {
+                    yield return part;
+                    part = new List<string>();
+                    length = 0;
+                }
+
+                part.Add(path);
+                length += path.Length + 20;
+            }
+
+            if (part.Count > 0)
+            {
+                yield return part;
+            }
+        }
+
+        private bool? SameGuid(string parent, string old, string commit, string renamed)
+        {
+            var before = MetaGuid(parent, old);
+            var after = MetaGuid(commit, renamed);
+            return before == null || after == null ? (bool?)null : before == after;
+        }
+
+        private string MetaGuid(string revision, string path)
+        {
+            var meta = path.EndsWith(".meta") ? path : path + ".meta";
+            var content = Run("show", $"{revision}:{meta}");
+            return content.IsSuccess
+                ? Lines(content.Output)
+                    .Where(line => line.StartsWith("guid:"))
+                    .Select(line => line.Substring("guid:".Length).Trim())
+                    .FirstOrDefault()
+                : null;
+        }
+
+        private static IEnumerable<string> Lines(string output) =>
+            output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+
+        public (GitResult Result, List<GitCommit> Commits) ReadCommits(IReadOnlyList<string> hashes,
+            ISet<string> unpushed)
+        {
+            var result = GitResult.Success("");
+            var commits = new List<GitCommit>();
+            for (var start = 0; start < hashes.Count; start += CommitsPerRead)
+            {
+                result = Run(new[]
+                    {
+                        "log", "--no-walk=unsorted", "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s", "--date=short"
+                    }
+                    .Concat(hashes.Skip(start).Take(CommitsPerRead))
+                    .Append("--")
+                    .ToArray());
+                if (!result.IsSuccess)
+                {
+                    return (result, new List<GitCommit>());
+                }
+
+                commits.AddRange(Lines(result.Output)
+                    .Select(line => line.Split(new[] { LogFieldSeparator }, 5, StringSplitOptions.None))
+                    .Where(fields => fields.Length == 5)
+                    .Select(fields => new GitCommit(fields[1], fields[2], fields[3], fields[4],
+                        !unpushed.Contains(fields[0]))));
+            }
+
+            return (result, commits);
+        }
+
+        public string RemoteRefs()
+        {
+            var refs = Run("for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes");
+            return refs.IsSuccess ? refs.Output : null;
+        }
+
+        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count)
         {
             var none = new List<GitCommit>();
             if (head == null)
@@ -236,23 +514,18 @@ namespace Upwake.Vetka
                 head = resolved.Output;
             }
 
-            var result = Run(new[]
-                {
-                    "log", "--skip=" + skip, "-n", count.ToString(), "--pretty=format:%h%x1f%an%x1f%ad%x1f%s",
-                    "--date=short", head
-                }
-                .Concat(PathFilter(paths))
-                .ToArray());
+            var result = Run("log", "--skip=" + skip, "-n", count.ToString(), "--pretty=format:%h%x1f%an%x1f%ad%x1f%s",
+                "--date=short", head, "--");
             if (!result.IsSuccess)
             {
                 return (result, none, head);
             }
 
-            var outgoing = new HashSet<string>(OutgoingCommitHashes(head, skip + count, paths));
+            var outgoing = new HashSet<string>(OutgoingCommitHashes(head, skip + count));
 
             return (result, result.Output
                 .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => line.Split(new[] { LogFieldSeparator }, StringSplitOptions.None))
+                .Select(line => line.Split(new[] { LogFieldSeparator }, 4, StringSplitOptions.None))
                 .Where(fields => fields.Length == 4)
                 .Select(fields => new GitCommit(fields[0], fields[1], fields[2], fields[3],
                     !outgoing.Contains(fields[0])))
@@ -346,22 +619,21 @@ namespace Upwake.Vetka
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList();
         }
 
-        private IEnumerable<string> OutgoingCommitHashes(string tip, int limit, IReadOnlyCollection<string> paths)
+        private IEnumerable<string> OutgoingCommitHashes(string tip, int limit)
         {
-            var result = OutgoingLog("--pretty=format:%h", limit, tip, paths);
+            var result = OutgoingLog("--pretty=format:%h", limit, tip);
             return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
                 ? Enumerable.Empty<string>()
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
-        private GitResult OutgoingLog(string format, int limit, string tip, IReadOnlyCollection<string> paths = null) =>
+        private GitResult OutgoingLog(string format, int limit, string tip) =>
             Run(new[] { "log" }.Concat(OutgoingRange(PushTarget(), tip))
-                .Concat(new[] { format, "-n", limit.ToString() })
-                .Concat(PathFilter(paths))
+                .Concat(new[] { format, "-n", limit.ToString(), "--" })
                 .ToArray());
 
-        private static IEnumerable<string> PathFilter(IReadOnlyCollection<string> paths) =>
-            new[] { "--" }.Concat(paths?.Select(path => ":(top,literal)" + path) ?? Enumerable.Empty<string>());
+        private static IEnumerable<string> PathFilter(IEnumerable<string> paths) =>
+            new[] { "--" }.Concat(paths.Select(path => ":(top,literal)" + path));
 
         private static IEnumerable<string> OutgoingRange(GitPushTarget? target, string tip)
         {
