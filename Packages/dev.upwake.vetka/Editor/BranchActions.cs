@@ -11,16 +11,18 @@ namespace Upwake.Vetka
             Action onCompleted)
         {
             var currentName = branches.Find(item => item.IsCurrent).Name;
+            var shownName = MenuText(branch.Name);
+            var shownCurrent = MenuText(currentName ?? "HEAD");
 
             AddItem(menu, "Checkout", !branch.IsCurrent, () => Checkout(git, branch, onCompleted));
-            AddItem(menu, $"New Branch from '{branch.Name}'...", true,
+            AddItem(menu, $"New Branch from '{shownName}'...", true,
                 () => NewBranch(git, branch.Name, branch.Ref, onCompleted));
             menu.AddSeparator("");
 
             var canIntegrate = currentName != null && !branch.IsCurrent;
-            AddItem(menu, $"Merge '{branch.Name}' into '{currentName ?? "HEAD"}'", canIntegrate,
+            AddItem(menu, $"Merge '{shownName}' into '{shownCurrent}'", canIntegrate,
                 () => Integrate(git, UpdateStrategy.Merge, branch, onCompleted));
-            AddItem(menu, $"Rebase '{currentName ?? "HEAD"}' onto '{branch.Name}'", canIntegrate,
+            AddItem(menu, $"Rebase '{shownCurrent}' onto '{shownName}'", canIntegrate,
                 () => Integrate(git, UpdateStrategy.Rebase, branch, onCompleted));
 
             if (!branch.IsRemote)
@@ -123,5 +125,7 @@ namespace Upwake.Vetka
                 menu.AddDisabledItem(new GUIContent(title));
             }
         }
+
+        private static string MenuText(string name) => name.Replace('/', '\u2215');
     }
 }
