@@ -473,7 +473,8 @@ namespace Upwake.Vetka
             {
                 result = Run(new[]
                     {
-                        "log", "--no-walk=unsorted", "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s", "--date=short"
+                        "log", "--no-walk=unsorted", "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%D%x1f%s",
+                        "--decorate=short", "--decorate-refs=refs/tags/", "--date=short"
                     }
                     .Concat(hashes.Skip(start).Take(CommitsPerRead))
                     .Append("--")
@@ -484,10 +485,10 @@ namespace Upwake.Vetka
                 }
 
                 commits.AddRange(Lines(result.Output)
-                    .Select(line => line.Split(new[] { LogFieldSeparator }, 5, StringSplitOptions.None))
-                    .Where(fields => fields.Length == 5)
-                    .Select(fields => new GitCommit(fields[1], fields[2], fields[3], fields[4],
-                        !unpushed.Contains(fields[0]))));
+                    .Select(line => line.Split(new[] { LogFieldSeparator }, 6, StringSplitOptions.None))
+                    .Where(fields => fields.Length == 6)
+                    .Select(fields => new GitCommit(fields[1], fields[2], fields[3], fields[5],
+                        !unpushed.Contains(fields[0]), TagNames(fields[4]))));
             }
 
             return (result, commits);
@@ -514,7 +515,8 @@ namespace Upwake.Vetka
                 head = resolved.Output;
             }
 
-            var result = Run("log", "--skip=" + skip, "-n", count.ToString(), "--pretty=format:%h%x1f%an%x1f%ad%x1f%s",
+            var result = Run("log", "--skip=" + skip, "-n", count.ToString(),
+                "--pretty=format:%h%x1f%an%x1f%ad%x1f%D%x1f%s", "--decorate=short", "--decorate-refs=refs/tags/",
                 "--date=short", head, "--");
             if (!result.IsSuccess)
             {
@@ -525,12 +527,18 @@ namespace Upwake.Vetka
 
             return (result, result.Output
                 .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => line.Split(new[] { LogFieldSeparator }, 4, StringSplitOptions.None))
-                .Where(fields => fields.Length == 4)
-                .Select(fields => new GitCommit(fields[0], fields[1], fields[2], fields[3],
-                    !outgoing.Contains(fields[0])))
+                .Select(line => line.Split(new[] { LogFieldSeparator }, 5, StringSplitOptions.None))
+                .Where(fields => fields.Length == 5)
+                .Select(fields => new GitCommit(fields[0], fields[1], fields[2], fields[4],
+                    !outgoing.Contains(fields[0]), TagNames(fields[3])))
                 .ToList(), head);
         }
+
+        private static List<string> TagNames(string decoration) =>
+            decoration.Split(new[] { ", " }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(name => name.StartsWith("tag: "))
+                .Select(name => name.Substring("tag: ".Length))
+                .ToList();
 
         public string LastCommitMessage()
         {

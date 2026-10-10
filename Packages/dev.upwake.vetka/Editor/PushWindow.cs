@@ -139,9 +139,29 @@ namespace Upwake.Vetka
             GUILayout.FlexibleSpace();
 
             EditorGUILayout.BeginHorizontal();
+            var pushTags = EditorGUILayout.ToggleLeft(PushTagsLabel, GitSettings.PushTagsEnabled, GUILayout.Width(80));
+            if (pushTags != GitSettings.PushTagsEnabled)
+            {
+                GitSettings.PushTagsEnabled = pushTags;
+            }
+
+            using (new EditorGUI.DisabledScope(!pushTags))
+            {
+                var mode = (PushTags)EditorGUILayout.Popup((int)GitSettings.PushTagsMode, PushTagsModes,
+                    GUILayout.Width(120));
+                if (mode != GitSettings.PushTagsMode)
+                {
+                    GitSettings.PushTagsMode = mode;
+                }
+            }
+
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
 
             var canPush = !_loading && !_pushing && _commits != null && _target.HasValue &&
-                          (_commits.Any() || !_target.Value.Exists);
+                          (_commits.Any() || !_target.Value.Exists || GitSettings.PushTagsEnabled);
             using (new EditorGUI.DisabledScope(!canPush))
             {
                 if (GUILayout.Button("Push"))
@@ -171,6 +191,15 @@ namespace Upwake.Vetka
         }
 
         private static string Commits(int count) => count == 1 ? "1 commit" : $"{count} commits";
+
+        private static readonly GUIContent PushTagsLabel =
+            new GUIContent("Push tags", "Push tags along with the commits");
+
+        private static readonly GUIContent[] PushTagsModes =
+        {
+            new GUIContent("Current Branch", "Annotated tags on the pushed commits (git push --follow-tags)"),
+            new GUIContent("All", "Every local tag (git push --tags)")
+        };
 
         private void ConfirmForcePush()
         {
@@ -205,7 +234,9 @@ namespace Upwake.Vetka
         {
             _pushing = true;
             var git = _git ??= new Git();
-            GitOperations.Run(forceOver == null ? "Git: pushing" : "Git: force pushing", () => git.Push(forceOver, shownHead), result =>
+            var tags = GitSettings.PushTagsEnabled ? GitSettings.PushTagsMode : (PushTags?)null;
+            GitOperations.Run(forceOver == null ? "Git: pushing" : "Git: force pushing",
+                () => git.Push(forceOver, shownHead, tags), result =>
             {
                 _pushing = false;
                 if (result.IsSuccess && this)
@@ -219,7 +250,7 @@ namespace Upwake.Vetka
 
                 if (result.IsRejected)
                 {
-                    RejectedPush.Offer(git, result, OnUpdatedAndPushed);
+                    RejectedPush.Offer(git, result, OnUpdatedAndPushed, tags);
                 }
                 else
                 {

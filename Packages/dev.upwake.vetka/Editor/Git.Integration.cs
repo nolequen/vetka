@@ -49,7 +49,7 @@ namespace Upwake.Vetka
             return Integrate(strategy, upstream);
         }
 
-        public GitResult UpdateAndPush(UpdateStrategy strategy)
+        public GitResult UpdateAndPush(UpdateStrategy strategy, PushTags? tags = null)
         {
             if (strategy == UpdateStrategy.Ask)
             {
@@ -88,7 +88,7 @@ namespace Upwake.Vetka
                 }
 
                 Run("update-ref", "-d", target.TrackingRef);
-                var recreated = Push();
+                var recreated = Push(tags: tags);
                 if (recreated.IsSuccess)
                 {
                     return GitResult.Success(
@@ -112,7 +112,7 @@ namespace Upwake.Vetka
                 updated = update.Message;
             }
 
-            var push = Push();
+            var push = Push(tags: tags);
             if (updated == null)
             {
                 return push;

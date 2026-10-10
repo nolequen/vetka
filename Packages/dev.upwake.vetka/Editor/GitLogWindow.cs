@@ -30,6 +30,7 @@ namespace Upwake.Vetka
         private bool _historyWithMeta;
         [NonSerialized] private History _history;
         [NonSerialized] private int _historyOffset;
+        [NonSerialized] private GUIStyle _tagStyle;
 
         private sealed class History
         {
@@ -349,6 +350,12 @@ namespace Upwake.Vetka
                 Repaint();
             }
 
+            if (current.type == EventType.ContextClick && rect.Contains(current.mousePosition))
+            {
+                ShowCommitMenu(commit);
+                current.Use();
+            }
+
             if (current.type == EventType.Repaint && commit.Hash == _selected)
             {
                 EditorGUI.DrawRect(rect, GitColors.Selection);
@@ -360,8 +367,87 @@ namespace Upwake.Vetka
             GUI.Label(new Rect(rect.x, rect.y, 60, rect.height), commit.Hash, style);
             GUI.Label(new Rect(rect.x + 64, rect.y, 80, rect.height), commit.Date, style);
             GUI.Label(new Rect(rect.x + 148, rect.y, 110, rect.height), commit.Author, style);
-            GUI.Label(new Rect(rect.x + 262, rect.y, Mathf.Max(0, rect.width - 262), rect.height), commit.Subject,
-                style);
+            var x = rect.x + 262;
+            _tagStyle ??= new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.MiddleCenter };
+            foreach (var tag in commit.Tags)
+            {
+                var content = new GUIContent(tag);
+                var width = _tagStyle.CalcSize(content).x + 8;
+                var chip = new Rect(x, rect.y + 1, Mathf.Max(0, Mathf.Min(width, rect.xMax - x)), rect.height - 2);
+                if (current.type == EventType.Repaint)
+                {
+                    EditorGUI.DrawRect(chip, GitColors.Tag);
+                }
+
+                GUI.Label(chip, content, _tagStyle);
+                x += width + 4;
+            }
+
+            GUI.Label(new Rect(x, rect.y, Mathf.Max(0, rect.xMax - x), rect.height), commit.Subject, style);
+        }
+
+        private void ShowCommitMenu(GitCommit commit)
+        {
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("New Tag..."), false, () => EditorApplication.delayCall += () => NewTag(commit));
+            foreach (var tag in commit.Tags)
+            {
+                var name = tag;
+                menu.AddItem(new GUIContent($"Delete Tag '{name.Replace('/', '∕')}'"), false,
+                    () => EditorApplication.delayCall += () => DeleteTag(name));
+            }
+
+            menu.ShowAsContext();
+        }
+
+        private void NewTag(GitCommit commit)
+        {
+            var git = _git ??= new Git();
+            NewTagWindow.Show($"{commit.Hash} {commit.Subject}", (name, message) =>
+            {
+                void Create() => GitOperations.Run($"Git: creating tag {name}",
+                    () => git.CreateTag(name, commit.Hash, message), OnTagChanged, changesRepository: true);
+
+                if (string.IsNullOrWhiteSpace(message))
+                {
+                    Create();
+                }
+                else
+                {
+                    GitIdentityWindow.Ensure(git, Create);
+                }
+            });
+        }
+
+        private void DeleteTag(string name)
+        {
+            var git = _git ??= new Git();
+            GitOperations.Read("Git: reading the remote", () => git.TagRemote(out _), remote =>
+            {
+                var question = $"Delete tag '{name}'?";
+                var choice = remote == null
+                    ? EditorUtility.DisplayDialog("Delete tag", question, "Delete", "Cancel") ? 0 : 1
+                    : EditorUtility.DisplayDialogComplex("Delete tag",
+                        $"{question}\n\nDeleting it on {remote} removes it for everyone who fetches from there.",
+                        "Delete Here", "Cancel", $"Delete Here and on {remote}");
+                if (choice == 1)
+                {
+                    return;
+                }
+
+                GitOperations.Run($"Git: deleting tag {name}", () => git.DeleteTag(name, choice == 2), OnTagChanged,
+                    changesRepository: true);
+            });
+        }
+
+        private void OnTagChanged(GitResult result)
+        {
+            if (this)
+            {
+                Refresh();
+            }
+
+            Notification.Show(result);
         }
 
         private void DrawMore(Rect rect)

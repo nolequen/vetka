@@ -5,7 +5,8 @@ namespace Upwake.Vetka
 {
     internal static class RejectedPush
     {
-        public static void Offer(Git git, GitResult rejected, Action<GitResult> completed = null)
+        public static void Offer(Git git, GitResult rejected, Action<GitResult> completed = null,
+            PushTags? tags = null)
         {
             var strategy = Choose(rejected.Message);
             if (!strategy.HasValue)
@@ -16,7 +17,7 @@ namespace Upwake.Vetka
             var chosen = strategy.Value;
             GitIdentityWindow.Ensure(git, () => GitOperations.Run(
                 $"Git: {chosen} of the incoming changes and push",
-                () => git.UpdateAndPush(chosen),
+                () => git.UpdateAndPush(chosen, tags),
                 result =>
                 {
                     Notification.Show(result);

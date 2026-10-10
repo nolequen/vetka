@@ -12,6 +12,8 @@ namespace Upwake.Vetka
         private static volatile bool _verboseLogging;
         private static bool _showBranchInTitle;
         private static bool _showStatusInProject;
+        private static bool _pushTags;
+        private static PushTags _pushTagsMode;
 
         static GitSettings()
         {
@@ -19,6 +21,10 @@ namespace Upwake.Vetka
             _verboseLogging = EditorPrefs.GetBool(Prefix + "VerboseLogging", false);
             _showBranchInTitle = EditorPrefs.GetBool(Prefix + "ShowBranchInTitle", true);
             _showStatusInProject = EditorPrefs.GetBool(Prefix + "ShowStatusInProject", true);
+            _pushTags = EditorPrefs.GetBool(Prefix + "PushTags", false);
+            _pushTagsMode = EditorPrefs.GetInt(Prefix + "PushTagsMode", 0) == (int)PushTags.All
+                ? PushTags.All
+                : PushTags.CurrentBranch;
 
             if (!string.IsNullOrEmpty(_gitPath))
             {
@@ -72,6 +78,26 @@ namespace Upwake.Vetka
             }
         }
 
+        public static bool PushTagsEnabled
+        {
+            get => _pushTags;
+            set
+            {
+                _pushTags = value;
+                EditorPrefs.SetBool(Prefix + "PushTags", value);
+            }
+        }
+
+        public static PushTags PushTagsMode
+        {
+            get => _pushTagsMode;
+            set
+            {
+                _pushTagsMode = value;
+                EditorPrefs.SetInt(Prefix + "PushTagsMode", (int)value);
+            }
+        }
+
         public static UpdateStrategy UpdateStrategyValue
         {
             get => GitProjectSettings.instance.UpdateStrategy;
@@ -84,5 +110,11 @@ namespace Upwake.Vetka
         Merge,
         Rebase,
         Ask
+    }
+
+    internal enum PushTags
+    {
+        CurrentBranch,
+        All
     }
 }

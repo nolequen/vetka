@@ -2067,6 +2067,344 @@ namespace Upwake.Vetka.Tests
         private static IEnumerable<GitFileChange> Files(params string[] paths) =>
             paths.Select(path => new GitFileChange(GitStatus.Unknown, path));
 
+        [Test]
+        public void ReadLog_ShowsTheTagsOfEachCommit()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "1\n");
+            repo.CommitAll("first");
+            repo.RunGit("tag", "v1");
+            repo.Write("a.txt", "2\n");
+            repo.CommitAll("second");
+            repo.RunGit("tag", "-a", "-m", "release", "v2");
+            repo.RunGit("tag", "release/2.0");
+            repo.RunGit("config", "log.decorate", "full");
+            var git = repo.Git;
+
+            var log = git.ReadLogPage(null, 0, 10).Commits;
+            var history = git.FileHistory(repo.Head, "a.txt", withMeta: false);
+            var commits = git.ReadCommits(history.Commits, history.Unpushed).Commits;
+
+            CollectionAssert.AreEquivalent(new[] { "v2", "release/2.0" }, log[0].Tags);
+            CollectionAssert.AreEqual(new[] { "v1" }, log[1].Tags);
+            CollectionAssert.AreEquivalent(new[] { "v2", "release/2.0" }, commits[0].Tags);
+            CollectionAssert.AreEqual(new[] { "v1" }, commits[1].Tags);
+        }
+
+        [Test]
+        public void CreateTag_WithoutAMessage_MakesALightweightTagEvenWhenTheUserSignsTags()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "1\n");
+            repo.CommitAll("first");
+            repo.RunGit("config", "tag.gpgSign", "true");
+            var head = repo.RunGit("rev-parse", "--short", "HEAD");
+
+            var result = repo.Git.CreateTag("v1", head, "  ");
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual($"Tag v1 created on {head}", result.Message);
+            Assert.AreEqual("commit", repo.RunGit("cat-file", "-t", "refs/tags/v1"));
+            Assert.AreEqual(repo.Head, repo.RunGit("rev-parse", "v1"));
+        }
+
+        [Test]
+        public void CreateTag_WithAMessage_MakesAnAnnotatedTagThatKeepsTheMessage()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "1\n");
+            repo.CommitAll("first");
+            var head = repo.RunGit("rev-parse", "--short", "HEAD");
+
+            var result = repo.Git.CreateTag(" v1 ", head, "Release 1\n\n# not a comment\n");
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("tag", repo.RunGit("cat-file", "-t", "refs/tags/v1"));
+            Assert.AreEqual(repo.Head, repo.RunGit("rev-parse", "v1^{commit}"));
+            Assert.AreEqual("Release 1\n\n# not a comment",
+                repo.RunGit("for-each-ref", "--format=%(contents)", "refs/tags/v1").Trim());
+        }
+
+        [TestCase("bad name")]
+        [TestCase("-x")]
+        [TestCase("a..b")]
+        [TestCase("HEAD")]
+        public void CreateTag_WithAnInvalidName_Refuses(string name)
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "1\n");
+            repo.CommitAll("first");
+
+            var result = repo.Git.CreateTag(name, repo.Head, "");
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual($"'{name}' is not a valid tag name", result.Message);
+            Assert.AreEqual("", repo.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void CreateTag_ThatAlreadyExists_ChangesNothing()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "1\n");
+            repo.CommitAll("first");
+            repo.RunGit("tag", "v1");
+            var first = repo.Head;
+            repo.Write("a.txt", "2\n");
+            repo.CommitAll("second");
+
+            var result = repo.Git.CreateTag("v1", repo.Head, "moved");
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("Tag v1 already exists", result.Message);
+            Assert.AreEqual(first, repo.RunGit("rev-parse", "v1"));
+        }
+
+        [Test]
+        public void DeleteTag_OnlyHere_KeepsItOnTheRemote()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("tag", "v1");
+            local.RunGit("push", "-q", "origin", "v1");
+
+            var result = local.Git.DeleteTag("v1", false);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Tag v1 deleted", result.Message);
+            Assert.AreEqual("", local.RunGit("tag", "-l"));
+            Assert.AreEqual("v1", remote.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void DeleteTag_HereAndOnTheRemote_RemovesBoth()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("tag", "-a", "-m", "release", "v1");
+            local.RunGit("push", "-q", "origin", "v1");
+
+            var result = local.Git.DeleteTag("v1", true);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Tag v1 deleted here and on origin", result.Message);
+            Assert.AreEqual("", local.RunGit("tag", "-l"));
+            Assert.AreEqual("", remote.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void DeleteTag_OnTheRemoteWithoutABranchCheckedOut_UsesTheDefaultRemote()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("tag", "v1");
+            local.RunGit("push", "-q", "origin", "v1");
+            local.RunGit("switch", "-q", "--detach");
+
+            var result = local.Git.DeleteTag("v1", true);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("", remote.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void DeleteTag_OnTheRemote_DoesNotSendOtherTagsWhenTheUserFollowsTags()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("tag", "old");
+            local.RunGit("push", "-q", "origin", "old");
+            local.RunGit("tag", "-a", "-m", "private", "secret");
+            local.RunGit("config", "push.followTags", "true");
+
+            var result = local.Git.DeleteTag("old", true);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("", remote.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void DeleteTag_OnTheRemoteWhereItIsMissing_SaysSoAndDeletesItHere()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("tag", "v1");
+
+            var result = local.Git.DeleteTag("v1", true);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Tag v1 deleted, it was not on origin", result.Message);
+            Assert.AreEqual("", local.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void Push_WithTagsOfTheCurrentBranch_SendsAnnotatedTagsOnThePushedCommits()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.Write("f.txt", "next\n");
+            local.CommitAll("next");
+            local.RunGit("tag", "-a", "-m", "release", "v1");
+            local.RunGit("tag", "light");
+
+            var result = local.Git.Push(tags: PushTags.CurrentBranch);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Pushed 1 commit and 1 tag to origin/main", result.Message);
+            Assert.AreEqual("v1", remote.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void Push_WithAllTags_SendsThemEvenWithoutNewCommits()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var local = PublishBase(remote);
+            local.RunGit("tag", "-a", "-m", "release", "v1");
+            local.RunGit("tag", "light");
+
+            var result = local.Git.Push(tags: PushTags.All);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Pushed 2 tags to origin", result.Message);
+            CollectionAssert.AreEquivalent(new[] { "light", "v1" },
+                remote.RunGit("tag", "-l").Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        [Test]
+        public void Push_WithATagTheRemoteHasOnAnotherCommit_PushesTheCommitsAndNamesTheTag()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            upstream.RunGit("tag", "v1");
+            upstream.RunGit("push", "-q", "origin", "v1");
+            using var local = remote.Clone("local");
+            local.RunGit("tag", "-d", "v1");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            local.RunGit("tag", "v1");
+
+            var result = local.Git.Push(tags: PushTags.All);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("Pushed 1 commit to origin/main, but origin already has tag v1 on another commit",
+                result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
+            Assert.AreEqual(upstream.Head, remote.RunGit("rev-parse", "v1"));
+        }
+
+        [TestCase(PushTags.CurrentBranch)]
+        [TestCase(PushTags.All)]
+        public void Push_OfTagsOnlyWhileTheRemoteIsAhead_ReportsTheTagsAndOffersNoUpdate(PushTags mode)
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            local.RunGit("tag", "-a", "-m", "release", "v1");
+            local.RunGit("fetch", "-q");
+            var mine = local.Head;
+
+            var result = local.Git.Push(tags: mode);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.IsFalse(result.IsRejected);
+            Assert.AreEqual("Pushed 1 tag to origin", result.Message);
+            Assert.AreEqual("v1", remote.RunGit("tag", "-l"));
+            Assert.AreEqual(mine, local.Head);
+        }
+
+        [Test]
+        public void Push_OfATagTheServerRefusesWhileTheRemoteIsAhead_ShowsTheServerError()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            remote.Write("hooks/pre-receive",
+                "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/tags/*) " +
+                "echo 'protected tag' >&2; exit 1;; esac; done\nexit 0\n");
+            local.RunGit("tag", "-a", "-m", "release", "v1");
+            local.RunGit("fetch", "-q");
+
+            var result = local.Git.Push(tags: PushTags.All);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.IsFalse(result.IsRejected);
+            StringAssert.Contains("protected tag", result.Message);
+            Assert.AreEqual("", remote.RunGit("tag", "-l"));
+        }
+
+        [Test]
+        public void Push_RejectedBecauseOfNewCommits_SaysWhichTagsWentAnyway()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            local.RunGit("tag", "base-tag");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+
+            var result = local.Git.Push(tags: PushTags.All);
+
+            Assert.IsTrue(result.IsRejected);
+            Assert.AreEqual("Push rejected: origin/main has commits that main does not have. 1 tag pushed anyway",
+                result.Message);
+        }
+
+        [Test]
+        public void Push_WithATagConflictAndABranchRefusedByTheServer_ShowsTheServerError()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            upstream.RunGit("tag", "v1");
+            upstream.RunGit("push", "-q", "origin", "v1");
+            remote.Write("hooks/pre-receive",
+                "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) " +
+                "echo 'protected branch' >&2; exit 1;; esac; done\nexit 0\n");
+            using var local = remote.Clone("local");
+            local.RunGit("tag", "-d", "v1");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            local.RunGit("tag", "v1");
+
+            var result = local.Git.Push(tags: PushTags.All);
+
+            Assert.IsFalse(result.IsSuccess);
+            StringAssert.Contains("protected branch", result.Message);
+            StringAssert.DoesNotStartWith("Tags not pushed", result.Message);
+            Assert.AreEqual(upstream.Head, remote.RunGit("rev-parse", "main"));
+        }
+
+        [Test]
+        public void UpdateAndPush_WithTags_PushesTheTagsToo()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q");
+            local.Write("g.txt", "mine\n");
+            local.CommitAll("mine");
+            var git = local.Git;
+            Assert.IsTrue(git.Push().IsRejected);
+            local.RunGit("tag", "-a", "-m", "release", "v1");
+            Assert.AreEqual("", remote.RunGit("tag", "-l"));
+
+            var result = git.UpdateAndPush(UpdateStrategy.Merge, PushTags.CurrentBranch);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
+            Assert.AreEqual(local.RunGit("rev-parse", "v1^{commit}"), remote.RunGit("rev-parse", "v1^{commit}"));
+        }
+
         private static TestRepository PublishBase(TestRepository remote)
         {
             var upstream = remote.Clone("upstream");

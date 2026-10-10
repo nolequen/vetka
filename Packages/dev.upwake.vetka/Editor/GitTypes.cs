@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Upwake.Vetka
@@ -205,13 +206,15 @@ namespace Upwake.Vetka
 
     internal readonly struct GitCommit
     {
-        public GitCommit(string hash, string author, string date, string subject, bool isPushed)
+        public GitCommit(string hash, string author, string date, string subject, bool isPushed,
+            IReadOnlyList<string> tags = null)
         {
             Hash = hash;
             Author = author;
             Date = date;
             Subject = subject;
             IsPushed = isPushed;
+            Tags = tags ?? Array.Empty<string>();
         }
 
         public string Hash { get; }
@@ -220,5 +223,6 @@ namespace Upwake.Vetka
         public string Subject { get; }
 
         public bool IsPushed { get; }
+        public IReadOnlyList<string> Tags { get; }
     }
 }

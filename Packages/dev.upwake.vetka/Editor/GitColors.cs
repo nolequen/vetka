@@ -17,6 +17,10 @@ namespace Upwake.Vetka
             ? new Color(0.55f, 0.85f, 1f)
             : new Color(0f, 0.33f, 0.6f);
 
+        public static Color Tag => EditorGUIUtility.isProSkin
+            ? new Color(0.45f, 0.39f, 0.18f)
+            : new Color(0.98f, 0.87f, 0.52f);
+
         public static GUIStyle StatusStyle(GUIStyle baseStyle, GitStatus status) =>
             TextStyle(baseStyle, Status(status));
 
