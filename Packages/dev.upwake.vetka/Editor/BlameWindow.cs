@@ -11,6 +11,8 @@ namespace Upwake.Vetka
         private const int AuthorLength = 18;
 
         [SerializeField] private string _path;
+        [SerializeField] private string _localPath;
+        [SerializeField] private string _revision;
 
         [NonSerialized] private Git _git;
         private List<GitBlameLine> _lines;
@@ -29,6 +31,8 @@ namespace Upwake.Vetka
             var window = GetWindow<BlameWindow>(utility: false, "Blame");
             window._git = git;
             window._path = path;
+            window._localPath = path;
+            window._revision = null;
             window.minSize = new Vector2(500, 300);
             window.wantsMouseMove = true;
             window.Refresh();
@@ -46,14 +50,24 @@ namespace Upwake.Vetka
 
             var git = _git;
             var path = _path;
-            GitOperations.Read("Git: reading the blame", () => git.Blame(path),
-                blame => ShowLines(path, blame.Result, blame.Lines),
-                reason => ShowLines(path, GitResult.Failure(reason), new List<GitBlameLine>()));
+            var revision = string.IsNullOrEmpty(_revision) ? null : _revision;
+            GitOperations.Read("Git: reading the blame", () => git.Blame(path, revision),
+                blame => ShowLines(path, revision, blame.Result, blame.Lines),
+                reason => ShowLines(path, revision, GitResult.Failure(reason), new List<GitBlameLine>()));
         }
 
-        private void ShowLines(string path, GitResult result, List<GitBlameLine> lines)
+        private void ShowRevision(string revision, string path)
         {
-            if (!this || path != _path)
+            _revision = revision;
+            _path = path;
+            _lines = null;
+            _error = null;
+            Refresh();
+        }
+
+        private void ShowLines(string path, string revision, GitResult result, List<GitBlameLine> lines)
+        {
+            if (!this || path != _path || revision != (string.IsNullOrEmpty(_revision) ? null : _revision))
             {
                 return;
             }
@@ -115,8 +129,23 @@ namespace Upwake.Vetka
             }
 
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            GUILayout.Label(_path ?? "", EditorStyles.toolbarButton);
+            var revision = string.IsNullOrEmpty(_revision) ? null : _revision;
+            GUILayout.Label(revision == null ? _path ?? "" : $"{_path}   @ {Short(revision)}",
+                EditorStyles.toolbarButton);
             GUILayout.FlexibleSpace();
+            if (revision != null && !string.IsNullOrEmpty(_localPath) &&
+                GUILayout.Button("Local", EditorStyles.toolbarButton))
+            {
+                var local = _localPath;
+                EditorApplication.delayCall += () =>
+                {
+                    if (this)
+                    {
+                        ShowRevision(null, local);
+                    }
+                };
+            }
+
             using (new EditorGUI.DisabledScope(_loading))
             {
                 if (GUILayout.Button("Refresh", EditorStyles.toolbarButton))
@@ -185,6 +214,19 @@ namespace Upwake.Vetka
                     }
                 }
 
+                if (line.IsCommitted && annotationRect.Contains(current.mousePosition))
+                {
+                    if (current.type == EventType.MouseDown && current.button == 1)
+                    {
+                        current.Use();
+                    }
+                    else if (current.type == EventType.ContextClick)
+                    {
+                        ShowRevisionMenu(line);
+                        current.Use();
+                    }
+                }
+
                 GUI.Label(annotationRect, annotation, _annotationStyle);
                 GUI.Label(new Rect(rect.x + annotationWidth, rect.y, NumberWidth, lineHeight), line.Number.ToString(),
                     _numberStyle);
@@ -194,6 +236,41 @@ namespace Upwake.Vetka
 
             GUILayout.EndScrollView();
         }
+
+        private void ShowRevisionMenu(GitBlameLine line)
+        {
+            var git = _git;
+            var hash = line.Hash;
+            var fileName = line.FileName;
+            var previous = line.Previous;
+            var previousFileName = line.PreviousFileName;
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("Show Diff"), false,
+                () => EditorApplication.delayCall += () => DiffWindow.ShowCommitWindow(git, hash, fileName));
+            menu.AddItem(new GUIContent($"Blame Revision {Short(hash)}"), false,
+                () => EditorApplication.delayCall += () => ShowRevisionLater(hash, fileName));
+            if (previous != null)
+            {
+                menu.AddItem(new GUIContent("Blame Previous Revision"), false,
+                    () => EditorApplication.delayCall += () => ShowRevisionLater(previous, previousFileName));
+            }
+            else
+            {
+                menu.AddDisabledItem(new GUIContent("Blame Previous Revision"));
+            }
+
+            menu.ShowAsContext();
+        }
+
+        private void ShowRevisionLater(string revision, string path)
+        {
+            if (this)
+            {
+                ShowRevision(revision, path);
+            }
+        }
+
+        private static string Short(string hash) => hash.Length > 8 ? hash.Substring(0, 8) : hash;
 
         private static Color AnnotationBackground(GitBlameLine line, bool even)
         {

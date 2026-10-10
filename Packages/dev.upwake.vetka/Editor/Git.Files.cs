@@ -595,6 +595,93 @@ namespace Upwake.Vetka
             return diff.ExitCode == 1 && diff.Output.Length > 0 ? new GitResult(0, diff.Output, diff.Error) : diff;
         }
 
+        public GitResult CompareWithLocal(string commit, string pathAtCommit, string localPath)
+        {
+            var top = TopLevel();
+            if (!top.IsSuccess)
+            {
+                return top;
+            }
+
+            var moved = pathAtCommit != localPath;
+            var paths = moved ? new[] { pathAtCommit, localPath } : new[] { localPath };
+            var arguments = new[] { "diff", commit, "--find-renames", "--no-color", "--no-ext-diff" }
+                .Concat(PathFilter(paths))
+                .ToArray();
+            var exists = File.Exists(Path.Combine(Path.GetFullPath(top.Output), localPath));
+            if (!exists && !moved)
+            {
+                return Run(arguments);
+            }
+
+            var diff = WithTemporaryIndex(environment =>
+            {
+                if (moved && !RunWithEnvironment(environment, "-C", top.Output, "update-index", "--force-remove", "--",
+                        pathAtCommit).IsSuccess)
+                {
+                    return null;
+                }
+
+                return exists && !RunWithPathspecs(environment, new[] { localPath }, "add", "-f", "--intent-to-add")
+                    .IsSuccess
+                    ? null
+                    : (GitResult?)RunWithEnvironment(environment, arguments);
+            });
+            return diff ?? GitResult.Failure($"Cannot compare {localPath} with its version in {commit}");
+        }
+
+        public GitResult GetVersion(string commit, string pathAtCommit, string localPath)
+        {
+            var entry = Run("ls-tree", "-z", "--full-name", commit, "--", ":(top,literal)" + pathAtCommit);
+            var fields = entry.IsSuccess
+                ? entry.Output.Split('\0')
+                    .FirstOrDefault(line => line.EndsWith("\t" + pathAtCommit, StringComparison.Ordinal))
+                    ?.Split(new[] { ' ', '\t' }, 4)
+                : null;
+            if (fields == null || fields.Length < 4 || fields[1] != "blob")
+            {
+                return GitResult.Failure($"{pathAtCommit} is not a file in {commit}");
+            }
+
+            var top = TopLevel();
+            if (!top.IsSuccess)
+            {
+                return top;
+            }
+
+            var root = Path.GetFullPath(top.Output);
+            if (Directory.Exists(Path.Combine(root, localPath)))
+            {
+                return GitResult.Failure($"Cannot write {localPath}: a folder with that name is in the way");
+            }
+
+            for (var slash = localPath.IndexOf('/'); slash > 0; slash = localPath.IndexOf('/', slash + 1))
+            {
+                var parent = localPath.Substring(0, slash);
+                if (File.Exists(Path.Combine(root, parent)))
+                {
+                    return GitResult.Failure($"Cannot write {localPath}: {parent} is a file");
+                }
+            }
+
+            var written = WithTemporaryIndex(environment =>
+            {
+                var added = RunWithEnvironment(environment, "-C", top.Output, "update-index", "--add", "--cacheinfo",
+                    $"{fields[0]},{fields[2]},{localPath}");
+                return (GitResult?)(added.IsSuccess
+                    ? RunWithEnvironment(environment, "-C", top.Output, "checkout-index", "-f", "--", localPath)
+                    : added);
+            });
+            if (!written.HasValue)
+            {
+                return GitResult.Failure($"Cannot write the version of {localPath} from {commit}");
+            }
+
+            return written.Value.IsSuccess
+                ? GitResult.Success($"{localPath} now has its content from {commit}")
+                : written.Value;
+        }
+
         public GitResult ApplyPatch(string patchPath)
         {
             var name = Path.GetFileName(patchPath);

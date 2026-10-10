@@ -47,6 +47,18 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
+        public void LocalPathFor_MapsOnlyTheRowsOfTheFileItselfToTheLocalFile()
+        {
+            var own = new[] { "Assets/a.txt", "Assets/a.txt.meta" };
+
+            Assert.AreEqual("Assets/AI/b.txt", GitLogWindow.LocalPathFor("Assets/a.txt", own, "Assets/AI/b.txt"));
+            Assert.AreEqual("Assets/AI/b.txt.meta",
+                GitLogWindow.LocalPathFor("Assets/a.txt.meta", own, "Assets/AI/b.txt"));
+            Assert.AreEqual("Assets/other.txt", GitLogWindow.LocalPathFor("Assets/other.txt", own, "Assets/AI/b.txt"));
+            Assert.AreEqual("Assets/a.txt", GitLogWindow.LocalPathFor("Assets/a.txt", null, "Assets/AI/b.txt"));
+        }
+
+        [Test]
         public void HistoryPath_StartsFromTheNameTheFileHasInHistory()
         {
             FileActions.Target Target(string file, GitFileChange? change, bool project) =>

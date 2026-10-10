@@ -98,7 +98,7 @@ namespace Upwake.Vetka
             return files;
         }
 
-        public (GitResult Result, List<GitBlameLine> Lines) Blame(string path)
+        public (GitResult Result, List<GitBlameLine> Lines) Blame(string path, string revision = null)
         {
             var top = TopLevel();
             if (!top.IsSuccess)
@@ -106,13 +106,19 @@ namespace Upwake.Vetka
                 return (top, new List<GitBlameLine>());
             }
 
-            var tracked = NulSeparated(Run("ls-files", "-z", "--full-name", "--", ":(top,icase,literal)" + path).Output);
-            if (tracked.Count == 1)
+            if (revision == null)
             {
-                path = tracked[0];
+                var tracked = NulSeparated(Run("ls-files", "-z", "--full-name", "--", ":(top,icase,literal)" + path)
+                    .Output);
+                if (tracked.Count == 1)
+                {
+                    path = tracked[0];
+                }
             }
 
-            var result = Run("blame", "--porcelain", "--", Path.Combine(top.Output, path));
+            var result = revision == null
+                ? Run("blame", "--porcelain", "--", Path.Combine(top.Output, path))
+                : Run("blame", "--porcelain", revision, "--", Path.Combine(top.Output, path));
             if (!result.IsSuccess)
             {
                 return (result, new List<GitBlameLine>());
@@ -129,10 +135,13 @@ namespace Upwake.Vetka
         internal static List<GitBlameLine> ParseBlame(string output)
         {
             var lines = new List<GitBlameLine>();
-            var commits = new Dictionary<string, (string Author, DateTime Date, string Summary, string FileName)>();
+            var commits =
+                new Dictionary<string, (string Author, DateTime Date, string Summary, string FileName, string Previous,
+                    string PreviousFileName)>();
             string hash = null;
             var number = 0;
-            (string Author, DateTime Date, string Summary, string FileName) info = default;
+            (string Author, DateTime Date, string Summary, string FileName, string Previous, string PreviousFileName) info =
+                default;
 
             foreach (var rawLine in output.Split('\n'))
             {
@@ -146,7 +155,7 @@ namespace Upwake.Vetka
 
                     commits[hash] = info;
                     lines.Add(new GitBlameLine(hash, info.Author, info.Date, info.Summary, info.FileName, number,
-                        line.Substring(1)));
+                        line.Substring(1), info.Previous, info.PreviousFileName));
                     hash = null;
                     continue;
                 }
@@ -186,6 +195,15 @@ namespace Upwake.Vetka
                     case "filename":
                         info.FileName = value;
                         break;
+                    case "previous":
+                        var space = value.IndexOf(' ');
+                        if (space > 0)
+                        {
+                            info.Previous = value.Substring(0, space);
+                            info.PreviousFileName = value.Substring(space + 1);
+                        }
+
+                        break;
                 }
             }
 
@@ -206,10 +224,11 @@ namespace Upwake.Vetka
 
         internal static int CommitsPerRead { get; set; } = 200;
 
-        public (GitResult Result, List<string> Commits, List<string> Paths, HashSet<string> Unpushed) FileHistory(
-            string head, string path, bool withMeta)
+        public (GitResult Result, List<string> Commits, List<string> Paths, HashSet<string> Unpushed,
+            Dictionary<string, HashSet<string>> Names) FileHistory(string head, string path, bool withMeta)
         {
             var found = new List<(string Hash, long Time)>();
+            var nameAt = new Dictionary<string, HashSet<string>>();
             var listed = new HashSet<string>();
             var unpushed = new HashSet<string>();
             var paths = new List<string>();
@@ -238,7 +257,7 @@ namespace Upwake.Vetka
                     .ToArray());
                 if (!walk.IsSuccess)
                 {
-                    return (walk, new List<string>(), paths, unpushed);
+                    return (walk, new List<string>(), paths, unpushed, nameAt);
                 }
 
                 var added = new List<string>();
@@ -252,7 +271,10 @@ namespace Upwake.Vetka
                     if (listed.Add(record.Hash))
                     {
                         found.Add((record.Hash, record.Time));
+                        nameAt[record.Hash] = new HashSet<string>();
                     }
+
+                    nameAt[record.Hash].Add(name);
 
                     if (record.Changes.Contains(("A", name)) && examined.Add((record.Hash, name)))
                     {
@@ -299,10 +321,50 @@ namespace Upwake.Vetka
                 .ThenBy(commit => commit.Index)
                 .Select(commit => commit.Hash)
                 .ToList();
-            return (GitResult.Success(""), commits, paths.Distinct().ToList(), unpushed);
+            return (GitResult.Success(""), commits, paths.Distinct().ToList(), unpushed, nameAt);
         }
 
         private const int MaxRenamesFollowed = 100;
+
+        public (GitResult Result, List<string> Commits, List<string> Paths, HashSet<string> Unpushed,
+            Dictionary<string, HashSet<string>> Names) FolderHistory(string head, string folder, bool withMeta)
+        {
+            var names = withMeta ? new[] { folder, folder + ".meta" } : new[] { folder };
+            var walk = Run(new[]
+                {
+                    "log", "--full-history", "--simplify-merges", "--no-renames", "--diff-merges=first-parent",
+                    "--name-status", "-z", "--format=%x1e%H %ct %P", head
+                }
+                .Concat(PathFilter(names))
+                .ToArray());
+            if (!walk.IsSuccess)
+            {
+                return (walk, new List<string>(), names.ToList(), new HashSet<string>(), null);
+            }
+
+            var commits = HistoryRecords(walk.Output)
+                .Where(record => record.Parents.Length < 2 || record.Changes.Count > 0)
+                .Select(record => record.Hash)
+                .ToList();
+            var unpushed = new HashSet<string>();
+            if (string.IsNullOrWhiteSpace(RemoteRefs()))
+            {
+                unpushed.UnionWith(commits);
+            }
+            else
+            {
+                var outgoing = Run(new[] { "log", "--full-history", "--format=%H" }
+                    .Concat(OutgoingRange(PushTarget(), head))
+                    .Concat(PathFilter(names))
+                    .ToArray());
+                if (outgoing.IsSuccess)
+                {
+                    unpushed.UnionWith(Lines(outgoing.Output));
+                }
+            }
+
+            return (GitResult.Success(""), commits, names.ToList(), unpushed, null);
+        }
 
         private static IEnumerable<(string Hash, long Time, string[] Parents, List<(string Status, string Path)> Changes)>
             HistoryRecords(string output)

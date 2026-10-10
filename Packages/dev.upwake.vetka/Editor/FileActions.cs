@@ -11,8 +11,9 @@ namespace Upwake.Vetka
         internal sealed class Target
         {
             public Target(List<GitFileChange> selected, List<GitFileChange> changes, string file,
-                GitFileChange? fileChange, bool busy, bool fromProject = false)
+                GitFileChange? fileChange, bool busy, bool fromProject = false, string folder = null)
             {
+                Folder = folder;
                 Selected = selected;
                 Changes = changes;
                 File = file;
@@ -27,6 +28,7 @@ namespace Upwake.Vetka
             public GitFileChange? FileChange { get; }
             public bool Busy { get; }
             public bool FromProject { get; }
+            public string Folder { get; }
 
             public List<GitFileChange> Untracked =>
                 Changes.Where(change => change.Status == GitStatus.Untracked).ToList();
@@ -70,10 +72,12 @@ namespace Upwake.Vetka
             new Item
             {
                 Name = ShowHistoryName,
-                IsEnabled = target => target.File != null && (!target.FileChange.HasValue ||
+                IsEnabled = target => target.Folder != null ||
+                                      target.File != null && (!target.FileChange.HasValue ||
                                                               target.FileChange.Value.Status != GitStatus.Untracked &&
                                                               target.FileChange.Value.Status != GitStatus.Added),
-                Run = target => GitLogWindow.ShowHistory(new Git(), HistoryPath(target), target.FromProject)
+                Run = target => GitLogWindow.ShowHistory(new Git(), target.Folder ?? HistoryPath(target),
+                    target.FromProject, target.Folder != null, target.Folder == null ? target.File : null)
             },
             new Item
             {
@@ -203,7 +207,7 @@ namespace Upwake.Vetka
             var file = assets.Count == 1 ? ProjectStatus.RepositoryPath(snapshot, assets[0]) : null;
             if (file == null || AssetDatabase.IsValidFolder(assets[0]))
             {
-                return new Target(selected, list, null, null, false);
+                return new Target(selected, list, null, null, false, file != null, file);
             }
 
             GitFileChange? fileChange = null;

@@ -28,6 +28,8 @@ namespace Upwake.Vetka
         private Vector2 _filesScrollPos;
         private string _historyFile;
         private bool _historyWithMeta;
+        private bool _historyFolder;
+        private string _historyLocal;
         [NonSerialized] private History _history;
         [NonSerialized] private int _historyOffset;
         [NonSerialized] private GUIStyle _tagStyle;
@@ -44,26 +46,32 @@ namespace Upwake.Vetka
             public List<string> Commits;
             public List<string> Paths;
             public HashSet<string> Unpushed;
+            public Dictionary<string, HashSet<string>> Names;
         }
 
-        public static void ShowWindow(Git git) => Open(git, null, false, "Git log");
+        public static void ShowWindow(Git git) => Open(git, null, false, false, "Git log");
 
-        public static void ShowHistory(Git git, string file, bool withMeta) =>
-            Open(git, file, withMeta, $"History: {System.IO.Path.GetFileName(file)}");
+        public static void ShowHistory(Git git, string file, bool withMeta, bool folder = false,
+            string local = null) =>
+            Open(git, file, withMeta, folder, $"History: {System.IO.Path.GetFileName(local ?? file)}", local);
 
-        private static void Open(Git git, string file, bool withMeta, string title)
+        private static void Open(Git git, string file, bool withMeta, bool folder, string title,
+            string local = null)
         {
             var window = Resources.FindObjectsOfTypeAll<GitLogWindow>()
-                .FirstOrDefault(candidate => candidate._historyFile == file && candidate._historyWithMeta == withMeta);
+                .FirstOrDefault(candidate => candidate._historyFile == file && candidate._historyWithMeta == withMeta &&
+                                             candidate._historyFolder == folder);
             if (window == null)
             {
                 window = CreateInstance<GitLogWindow>();
                 window._historyFile = file;
                 window._historyWithMeta = withMeta;
+                window._historyFolder = folder;
                 window.titleContent = new GUIContent(title);
             }
 
             window._git = git;
+            window._historyLocal = local;
             window.minSize = new Vector2(520, 300);
             window.Show();
             window.Focus();
@@ -82,8 +90,8 @@ namespace Upwake.Vetka
             public HashSet<string> Foreign = new HashSet<string>();
         }
 
-        private static FirstPage ReadFirstPage(Git git, string file, bool withMeta, string logRef, int count,
-            History cached)
+        private static FirstPage ReadFirstPage(Git git, string file, bool withMeta, bool folder, string logRef,
+            int count, History cached)
         {
             var branch = git.CurrentBranch();
             if (file == null)
@@ -117,7 +125,7 @@ namespace Upwake.Vetka
                 : null;
             if (history == null)
             {
-                var read = git.FileHistory(head, file, withMeta);
+                var read = folder ? git.FolderHistory(head, file, withMeta) : git.FileHistory(head, file, withMeta);
                 if (!read.Result.IsSuccess)
                 {
                     return new FirstPage { Result = read.Result, Head = head, Branch = branch };
@@ -126,7 +134,7 @@ namespace Upwake.Vetka
                 history = new History
                 {
                     Head = head, Branch = branch, Remotes = remotes, Commits = read.Commits, Paths = read.Paths,
-                    Unpushed = read.Unpushed
+                    Unpushed = read.Unpushed, Names = read.Names
                 };
             }
 
@@ -164,11 +172,12 @@ namespace Upwake.Vetka
                 (_history != null ? _historyOffset : _commits?.Count ?? 0) + (_loadingMore ? PageSize : 0));
             var file = _historyFile;
             var withMeta = _historyWithMeta;
+            var folder = _historyFolder;
             var logRef = _logRef;
             var cached = force ? null : _history;
             GitOperations.Read(
                 file == null ? "Git: reading the log" : "Git: reading the file history",
-                () => ReadFirstPage(git, file, withMeta, logRef, count, cached),
+                () => ReadFirstPage(git, file, withMeta, folder, logRef, count, cached),
                 state =>
                 {
                     if (!this)
@@ -329,11 +338,14 @@ namespace Upwake.Vetka
                     return;
                 }
 
-                var paths = _history?.Paths;
+                var paths = OwnNames(hash);
+                var folder = _historyFolder ? _historyFile + "/" : null;
+                bool Own(string path) => path != null &&
+                                         (paths.Contains(path) ||
+                                          folder != null && path.StartsWith(folder, StringComparison.Ordinal));
                 var own = paths == null
                     ? files
-                    : files.Where(file => paths.Contains(file.Path) ||
-                                          file.OldPath != null && paths.Contains(file.OldPath)).ToList();
+                    : files.Where(file => Own(file.Path) || Own(file.OldPath)).ToList();
                 _files = own.Count > 0 ? own : files;
                 if (!_files.Exists(file => file.Path == _selectedFile))
                 {
@@ -447,7 +459,9 @@ namespace Upwake.Vetka
 
             if (_commits.Count == 0)
             {
-                EditorGUILayout.LabelField(_historyFile == null ? "No commits yet" : "No commits change this file");
+                EditorGUILayout.LabelField(_historyFile == null ? "No commits yet"
+                    : _historyFolder ? "No commits change this folder"
+                    : "No commits change this file");
                 return;
             }
 
@@ -686,8 +700,11 @@ namespace Upwake.Vetka
                 if (current.type == EventType.ContextClick && rect.Contains(current.mousePosition))
                 {
                     var path = file.Path;
+                    var present = file.Status != GitStatus.Deleted;
                     var menu = new GenericMenu();
                     menu.AddItem(new GUIContent("Show Diff"), false, () => ShowDiff(commit, path));
+                    AddItem(menu, "Compare with Local", present, () => CompareWithLocal(commit, path));
+                    AddItem(menu, "Get This Version...", present, () => GetVersion(commit, path));
                     menu.ShowAsContext();
                     current.Use();
                 }
@@ -705,6 +722,59 @@ namespace Upwake.Vetka
         {
             var git = _git;
             EditorApplication.delayCall += () => DiffWindow.ShowCommitWindow(git, commit, path);
+        }
+
+        private ICollection<string> OwnNames(string commit)
+        {
+            if (_history == null)
+            {
+                return null;
+            }
+
+            if (_history.Names == null || !_history.Names.TryGetValue(commit, out var names))
+            {
+                return _history.Paths;
+            }
+
+            return names.SelectMany(name => _historyWithMeta ? new[] { name, name + ".meta" } : new[] { name })
+                .ToList();
+        }
+
+        internal static string LocalPathFor(string pathAtCommit, ICollection<string> own, string local)
+        {
+            if (local == null || own == null || !own.Contains(pathAtCommit))
+            {
+                return pathAtCommit;
+            }
+
+            return pathAtCommit.EndsWith(".meta", StringComparison.Ordinal) &&
+                   !local.EndsWith(".meta", StringComparison.Ordinal)
+                ? local + ".meta"
+                : local;
+        }
+
+        private string LocalPath(string commit, string pathAtCommit) =>
+            LocalPathFor(pathAtCommit, _historyFile == null || _historyFolder ? null : OwnNames(commit),
+                _historyLocal ?? _historyFile);
+
+        private void CompareWithLocal(string commit, string pathAtCommit)
+        {
+            DiffWindow.ShowCompareWindow(_git ??= new Git(), commit, pathAtCommit, LocalPath(commit, pathAtCommit));
+        }
+
+        private void GetVersion(string commit, string pathAtCommit)
+        {
+            var local = LocalPath(commit, pathAtCommit);
+            if (!EditorUtility.DisplayDialog("Get this version",
+                    $"Replace {local} with its version from {commit}?\n\n" +
+                    "Its current content will be lost unless it is committed.", "Replace", "Cancel"))
+            {
+                return;
+            }
+
+            var git = _git ??= new Git();
+            GitOperations.Run($"Git: getting {local} from {commit}", () => git.GetVersion(commit, pathAtCommit, local),
+                Notification.Show, refreshAssets: true, prepare: UnsavedChanges.SaveOrCancel);
         }
 
         private void DrawButtons()

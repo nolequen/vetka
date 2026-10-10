@@ -130,7 +130,7 @@ namespace Upwake.Vetka
     internal readonly struct GitBlameLine
     {
         public GitBlameLine(string hash, string author, DateTime date, string summary, string fileName, int number,
-            string text)
+            string text, string previous = null, string previousFileName = null)
         {
             Hash = hash;
             Author = author;
@@ -139,7 +139,12 @@ namespace Upwake.Vetka
             FileName = fileName;
             Number = number;
             Text = text;
+            Previous = previous;
+            PreviousFileName = previousFileName;
         }
+
+        public string Previous { get; }
+        public string PreviousFileName { get; }
 
         public string Hash { get; }
         public string Author { get; }
