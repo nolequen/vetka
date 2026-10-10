@@ -558,6 +558,22 @@ namespace Upwake.Vetka
             return head.IsSuccess ? head.Output : null;
         }
 
+        public string CommitOf(string reference)
+        {
+            var commit = Run("rev-parse", "-q", "--verify", reference + "^{commit}");
+            return commit.IsSuccess ? commit.Output : null;
+        }
+
+        public HashSet<string> CommitsMissingFromHead(string tip, int limit)
+        {
+            var hasHead = Run("rev-parse", "-q", "--verify", "HEAD").IsSuccess;
+            var log = Run(new[] { "log", "--format=%h", "-n", limit.ToString(), tip }
+                .Concat(hasHead ? new[] { "--not", "HEAD" } : Array.Empty<string>())
+                .Append("--")
+                .ToArray());
+            return new HashSet<string>(log.IsSuccess ? Lines(log.Output) : Enumerable.Empty<string>());
+        }
+
         public GitResult UndoLastCommit(string expectedHead)
         {
             var refusal = RefuseDuringOperation("Undoing the last commit");

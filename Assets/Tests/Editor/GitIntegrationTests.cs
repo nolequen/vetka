@@ -3239,6 +3239,267 @@ namespace Upwake.Vetka.Tests
             return upstream;
         }
 
+        [Test]
+        public void CherryPick_TakesOnlyTheChosenCommitWithItsMessage()
+        {
+            using var repo = CreateFeatureBranch();
+            var pick = Short(repo, "feature");
+            var before = repo.Head;
+
+            var result = repo.Git.CherryPick(pick);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual($"Cherry-picked {pick} \"change f\" into main", result.Message);
+            Assert.AreEqual(before, repo.RunGit("rev-parse", "HEAD^"));
+            Assert.AreEqual("change f", repo.RunGit("log", "-1", "--format=%s"));
+            Assert.AreEqual("1\n2\nfeature\n", repo.Read("f.txt"));
+            Assert.IsFalse(repo.Exists("a.txt"));
+        }
+
+        [Test]
+        public void CherryPick_WithLocalChanges_PutsThemBack()
+        {
+            using var repo = CreateFeatureBranch();
+            repo.Write("g.txt", "local\n");
+
+            var result = repo.Git.CherryPick(Short(repo, "feature"));
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            StringAssert.EndsWith(", local changes restored", result.Message);
+            Assert.AreEqual("local\n", repo.Read("g.txt"));
+            Assert.AreEqual(0, repo.Git.Stashes().Count);
+        }
+
+        [Test]
+        public void CherryPick_ThatConflicts_LeavesTheProjectUnchanged()
+        {
+            using var repo = CreateFeatureBranch();
+            repo.Write("f.txt", "1\n2\nmain\n");
+            repo.CommitAll("main f");
+            repo.Write("g.txt", "local\n");
+            var before = repo.Snapshot();
+            var pick = Short(repo, "feature");
+
+            var result = repo.Git.CherryPick(pick);
+
+            Assert.IsFalse(result.IsSuccess);
+            StringAssert.StartsWith($"Cherry-pick of {pick} failed, the project is unchanged", result.Message);
+            StringAssert.Contains("f.txt", result.Message);
+            Assert.AreEqual(before, repo.Snapshot());
+            Assert.IsFalse(repo.Exists(".git/CHERRY_PICK_HEAD"));
+            Assert.AreEqual(0, repo.Git.Stashes().Count);
+        }
+
+        [Test]
+        public void CherryPick_OfACommitAlreadyInTheBranch_Refuses()
+        {
+            using var repo = CreateFeatureBranch();
+            var commit = Short(repo, "main~1");
+
+            var result = repo.Git.CherryPick(commit);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual($"{commit} is already in main", result.Message);
+        }
+
+        [Test]
+        public void CherryPick_WhoseChangesAreAlreadyThere_SaysSoAndChangesNothing()
+        {
+            using var repo = CreateFeatureBranch();
+            var pick = Short(repo, "feature");
+            Assert.IsTrue(repo.Git.CherryPick(pick).IsSuccess);
+            var head = repo.Head;
+
+            var result = repo.Git.CherryPick(pick);
+
+            Assert.IsFalse(result.IsSuccess);
+            StringAssert.StartsWith($"Cherry-pick of {pick} failed, the project is unchanged", result.Message);
+            StringAssert.EndsWith("Its changes are already in main", result.Message);
+            Assert.AreEqual(head, repo.Head);
+            Assert.IsFalse(repo.Exists(".git/CHERRY_PICK_HEAD"));
+        }
+
+        [Test]
+        public void CherryPick_WithAnUnfinishedSequenceFromTheTerminal_RefusesAndKeepsItsCommits()
+        {
+            using var repo = CreateFeatureBranch();
+            repo.Write("f.txt", "1\n2\nmain\n");
+            repo.CommitAll("main f");
+            repo.RunGit("switch", "-q", "-c", "extra", "feature");
+            repo.Write("e.txt", "extra\n");
+            repo.CommitAll("extra");
+            repo.RunGit("switch", "-q", "main");
+            Assert.AreNotEqual(0, repo.TryRunGit("cherry-pick", "feature~1", "feature", "extra"));
+            repo.Write("f.txt", "1\n2\nresolved\n");
+            repo.RunGit("add", "f.txt");
+            repo.RunGit("commit", "-q", "--no-edit");
+            var head = repo.Head;
+
+            var result = repo.Git.CherryPick(Short(repo, "extra"));
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("Cannot cherry-pick: an earlier cherry-pick or revert of several commits is unfinished, " +
+                            "finish it or quit it with Git first", result.Message);
+            Assert.AreEqual(head, repo.Head);
+        }
+
+        [Test]
+        public void CherryPick_OntoABranchWithoutCommits_Refuses()
+        {
+            using var repo = CreateFeatureBranch();
+            var pick = Short(repo, "feature");
+            repo.RunGit("switch", "-q", "--orphan", "fresh");
+
+            var result = repo.Git.CherryPick(pick);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("Cannot cherry-pick: fresh has no commits yet", result.Message);
+            Assert.IsFalse(repo.Exists(".git/CHERRY_PICK_HEAD"));
+        }
+
+        [Test]
+        public void CherryPick_StoppedByALockedIndex_ShowsGitsReason()
+        {
+            using var repo = CreateFeatureBranch();
+            var pick = Short(repo, "feature");
+            repo.Write(".git/index.lock", "");
+            var previous = Git.LockRetryTimeout;
+            Git.LockRetryTimeout = TimeSpan.Zero;
+            try
+            {
+                var result = repo.Git.CherryPick(pick);
+
+                Assert.IsFalse(result.IsSuccess);
+                StringAssert.Contains("index.lock", result.Message);
+                StringAssert.DoesNotContain("already in", result.Message);
+            }
+            finally
+            {
+                Git.LockRetryTimeout = previous;
+                File.Delete(Path.Combine(repo.Root, ".git", "index.lock"));
+            }
+        }
+
+        [Test]
+        public void CherryPick_IsStoppedOnlyByUntrackedFilesThatTheCommitAdds()
+        {
+            using var repo = CreateFeatureBranch();
+            repo.Write("a.txt", "mine, not tracked\n");
+
+            var other = repo.Git.CherryPick(Short(repo, "feature"));
+            var adding = repo.Git.CherryPick(Short(repo, "feature~1"));
+
+            Assert.IsTrue(other.IsSuccess, other.Message);
+            Assert.IsFalse(adding.IsSuccess);
+            StringAssert.StartsWith($"Cherry-pick of {Short(repo, "feature~1")} is not possible, " +
+                                    "it would overwrite these files that Git does not track", adding.Message);
+            StringAssert.Contains("a.txt", adding.Message);
+            Assert.AreEqual("mine, not tracked\n", repo.Read("a.txt"));
+        }
+
+        [Test]
+        public void CherryPick_OfAMergeCommit_Refuses()
+        {
+            using var repo = CreateFeatureBranch();
+            repo.RunGit("switch", "-q", "feature");
+            repo.RunGit("merge", "-q", "--no-ff", "-m", "merge main", "main");
+            var merge = Short(repo, "HEAD");
+            repo.RunGit("switch", "-q", "main");
+
+            var result = repo.Git.CherryPick(merge);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual($"Cherry-picking merge commit {merge} is not supported", result.Message);
+        }
+
+        [Test]
+        public void Revert_UndoesACommitOfTheBranch()
+        {
+            using var repo = CreateFeatureBranch();
+            repo.Write("f.txt", "1\n2\nmain\n");
+            repo.CommitAll("main f");
+            var target = Short(repo, "HEAD");
+            repo.Write("m.txt", "main 2\n");
+            repo.CommitAll("later");
+
+            var result = repo.Git.Revert(target);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual($"Reverted {target} \"main f\"", result.Message);
+            Assert.AreEqual("1\n2\n3\n", repo.Read("f.txt"));
+            Assert.AreEqual("main 2\n", repo.Read("m.txt"));
+            StringAssert.StartsWith("Revert \"main f\"", repo.RunGit("log", "-1", "--format=%s"));
+        }
+
+        [Test]
+        public void Revert_OfACommitOutsideTheBranch_Refuses()
+        {
+            using var repo = CreateFeatureBranch();
+            var commit = Short(repo, "feature");
+
+            var result = repo.Git.Revert(commit);
+
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual($"{commit} is not in main, only commits of the current branch can be reverted",
+                result.Message);
+        }
+
+        [Test]
+        public void Revert_ThatConflicts_LeavesTheProjectUnchanged()
+        {
+            using var repo = CreateFeatureBranch();
+            repo.Write("f.txt", "1\n2\nmain\n");
+            repo.CommitAll("main f");
+            var target = Short(repo, "HEAD");
+            repo.Write("f.txt", "1\n2\nagain\n");
+            repo.CommitAll("again");
+            repo.Write("g.txt", "local\n");
+            var before = repo.Snapshot();
+
+            var result = repo.Git.Revert(target);
+
+            Assert.IsFalse(result.IsSuccess);
+            StringAssert.StartsWith($"Revert of {target} failed, the project is unchanged", result.Message);
+            Assert.AreEqual(before, repo.Snapshot());
+            Assert.IsFalse(repo.Exists(".git/REVERT_HEAD"));
+            Assert.AreEqual(0, repo.Git.Stashes().Count);
+        }
+
+        [Test]
+        public void CommitsMissingFromHead_ListsOnlyTheOwnCommitsOfAnotherBranch()
+        {
+            using var repo = CreateFeatureBranch();
+            var git = repo.Git;
+            var tip = git.CommitOf("refs/heads/feature");
+
+            var log = git.ReadLogPage(tip, 0, 10).Commits.Select(commit => commit.Subject);
+            var missing = git.CommitsMissingFromHead(tip, 10);
+
+            CollectionAssert.AreEqual(new[] { "change f", "add a", "base" }, log);
+            CollectionAssert.AreEquivalent(new[] { Short(repo, "feature"), Short(repo, "feature~1") }, missing);
+            Assert.IsNull(git.CommitOf("refs/heads/missing"));
+        }
+
+        private static TestRepository CreateFeatureBranch()
+        {
+            var repo = TestRepository.Create();
+            repo.Write("f.txt", "1\n2\n3\n");
+            repo.Write("g.txt", "g\n");
+            repo.CommitAll("base");
+            repo.RunGit("switch", "-q", "-c", "feature");
+            repo.Write("a.txt", "added on feature\n");
+            repo.CommitAll("add a");
+            repo.Write("f.txt", "1\n2\nfeature\n");
+            repo.CommitAll("change f");
+            repo.RunGit("switch", "-q", "main");
+            repo.Write("m.txt", "main\n");
+            repo.CommitAll("main");
+            return repo;
+        }
+
+        private static string Short(TestRepository repo, string revision) =>
+            repo.RunGit("rev-parse", "--short", revision);
+
         private static TestRepository CreateDivergedBranches()
         {
             var repo = TestRepository.Create();

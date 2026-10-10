@@ -193,6 +193,100 @@ namespace Upwake.Vetka
             });
         }
 
+        public GitResult CherryPick(string commit) => ApplyCommit(commit, false);
+
+        public GitResult Revert(string commit) => ApplyCommit(commit, true);
+
+        private GitResult ApplyCommit(string commit, bool revert)
+        {
+            var verb = revert ? "revert" : "cherry-pick";
+            var branch = CurrentBranch(out var branchError);
+            if (branch == null)
+            {
+                return branchError;
+            }
+
+            if (branch == "HEAD")
+            {
+                return GitResult.Failure($"Cannot {verb}: no branch is checked out");
+            }
+
+            if (!HasHead())
+            {
+                return GitResult.Failure($"Cannot {verb}: {branch} has no commits yet");
+            }
+
+            var sequencer = Run("rev-parse", "--git-path", "sequencer");
+            if (sequencer.IsSuccess && Directory.Exists(Path.GetFullPath(Path.Combine(_projectRoot, sequencer.Output))))
+            {
+                return GitResult.Failure($"Cannot {verb}: an earlier cherry-pick or revert of several commits is " +
+                                         "unfinished, finish it or quit it with Git first");
+            }
+
+            var info = Run("log", "-1", "--format=%h%x1f%P%x1f%s", commit, "--");
+            var fields = info.IsSuccess ? info.Output.Split(new[] { LogFieldSeparator }, 3, StringSplitOptions.None) : null;
+            if (fields == null || fields.Length < 3)
+            {
+                return GitResult.Failure($"Commit {commit} cannot be found");
+            }
+
+            var hash = fields[0];
+            var parents = fields[1].Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parents.Length > 1)
+            {
+                return GitResult.Failure(revert
+                    ? $"Reverting merge commit {hash} is not supported"
+                    : $"Cherry-picking merge commit {hash} is not supported");
+            }
+
+            var contained = Run("merge-base", "--is-ancestor", commit, "HEAD").IsSuccess;
+            if (!revert && contained)
+            {
+                return GitResult.Failure($"{hash} is already in {branch}");
+            }
+
+            if (revert && !contained)
+            {
+                return GitResult.Failure($"{hash} is not in {branch}, only commits of the current branch can be reverted");
+            }
+
+            if (revert && parents.Length == 0)
+            {
+                return GitResult.Failure($"Reverting the first commit {hash} is not supported");
+            }
+
+            var parent = parents.Length > 0 ? parents[0] : null;
+            var shown = $"{hash} \"{fields[2]}\"";
+            return WithLocalChangesSaved(new TreeChange
+            {
+                Description = revert ? $"Revert of {hash}" : $"Cherry-pick of {hash}",
+                Target = revert ? parent : commit,
+                IncomingFrom = revert ? commit : parent,
+                Done = revert ? $"Reverted {shown}" : $"Cherry-picked {shown} into {branch}",
+                Restored = "local changes restored",
+                Apply = () =>
+                {
+                    var applied = revert ? Run("revert", "--no-edit", commit) : Run("cherry-pick", commit);
+                    return applied.ExitCode == 1 && string.IsNullOrEmpty(Conflicts()) &&
+                           Run("diff", "--cached", "--quiet", "HEAD").IsSuccess
+                        ? GitResult.Failure(revert
+                            ? $"Its changes are already undone in {branch}"
+                            : $"Its changes are already in {branch}")
+                        : applied;
+                },
+                Abort = () => Run(verb, "--abort"),
+                Quit = () => Run(verb, "--quit"),
+                Remember = head => new ReturnPoint
+                {
+                    Name = head,
+                    Head = head,
+                    Branch = branch,
+                    GoBack = () => Run("reset", "--hard", "--quiet", head),
+                    GoBackKeepingChanges = () => Run("reset", "--keep", "--quiet", head)
+                }
+            });
+        }
+
         private string ShortName(string reference)
         {
             if (!reference.StartsWith("refs/", StringComparison.Ordinal))
@@ -211,6 +305,7 @@ namespace Upwake.Vetka
             public string Description;
             public string Target;
             public string TargetCommit;
+            public string IncomingFrom;
             public bool ThreeWay;
             public string Done;
             public string Restored;
@@ -375,14 +470,17 @@ namespace Upwake.Vetka
             }
 
             IEnumerable<string> added = NulSeparated(diff.Output);
-            if (change.ThreeWay)
+            var from = change.IncomingFrom;
+            if (from == null && change.ThreeWay)
             {
                 var mergeBase = Run("merge-base", head, change.TargetCommit);
-                var incoming = mergeBase.IsSuccess ? Touched(mergeBase.Output, change.TargetCommit) : null;
-                if (incoming != null)
-                {
-                    added = added.Where(incoming.Contains);
-                }
+                from = mergeBase.IsSuccess ? mergeBase.Output : null;
+            }
+
+            var incoming = from != null ? Touched(from, change.TargetCommit) : null;
+            if (incoming != null)
+            {
+                added = added.Where(incoming.Contains);
             }
 
             var top = TopLevel();
@@ -834,7 +932,8 @@ namespace Upwake.Vetka
             var mergeBase = change.ThreeWay
                 ? Run("merge-base", start.Head, change.TargetCommit)
                 : GitResult.Failure("No merge base");
-            var touched = Touched(mergeBase.IsSuccess ? mergeBase.Output : start.Head, change.TargetCommit);
+            var touched = Touched(change.IncomingFrom ?? (mergeBase.IsSuccess ? mergeBase.Output : start.Head),
+                change.TargetCommit);
             if (different == null || touched == null)
             {
                 return (FileList("Files changed while it ran", changed.Concat(created)), null);
