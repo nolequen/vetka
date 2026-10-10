@@ -3480,6 +3480,56 @@ namespace Upwake.Vetka.Tests
             Assert.IsNull(git.CommitOf("refs/heads/missing"));
         }
 
+        [Test]
+        public void CompareBranch_ListsCommitsBothWaysAndFilesAgainstTheWorkingTree()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("f.txt", "1\n2\n3\n");
+            repo.Write("g.txt", "g\n");
+            repo.Write("r.txt", "alpha\nbeta\ngamma\ndelta\n");
+            repo.CommitAll("base");
+            repo.RunGit("switch", "-q", "-c", "feature");
+            repo.Write("a.txt", "added on feature\n");
+            repo.CommitAll("add a");
+            repo.Write("f.txt", "1\n2\nfeature\n");
+            repo.CommitAll("change f");
+            repo.RunGit("switch", "-q", "main");
+            repo.RunGit("mv", "r.txt", "s.txt");
+            repo.Write("m.txt", "main\n");
+            repo.CommitAll("main");
+            repo.Write("g.txt", "local\n");
+            var git = repo.Git;
+            var tip = git.CommitOf("refs/heads/feature");
+
+            var onlyFeature = git.CommitsOnlyIn(tip, "HEAD", 1);
+            var onlyMain = git.CommitsOnlyIn("HEAD", tip, 100);
+            var files = git.DifferencesFromWorkingTree(tip);
+
+            Assert.AreEqual(2, onlyFeature.Count);
+            CollectionAssert.AreEqual(new[] { "change f" }, onlyFeature.Commits.Select(commit => commit.Subject));
+            Assert.AreEqual(1, onlyMain.Count);
+            CollectionAssert.AreEqual(new[] { "main" }, onlyMain.Commits.Select(commit => commit.Subject));
+            Assert.IsTrue(files.Result.IsSuccess, files.Result.Message);
+            CollectionAssert.AreEquivalent(
+                new[] { "a.txt Deleted", "f.txt Modified", "g.txt Modified", "m.txt Added", "s.txt Renamed r.txt" },
+                files.Files.Select(file => $"{file.Path} {file.Status}{(file.OldPath != null ? " " + file.OldPath : "")}"));
+        }
+
+        [Test]
+        public void CompareBranch_FromABranchWithoutCommits_ListsAllItsCommits()
+        {
+            using var repo = CreateFeatureBranch();
+            var git = repo.Git;
+            var tip = git.CommitOf("refs/heads/feature");
+            repo.RunGit("switch", "-q", "--orphan", "fresh");
+
+            var commits = git.CommitsOnlyIn(tip, git.HeadCommit(), 10);
+
+            Assert.IsTrue(commits.Result.IsSuccess, commits.Result.Message);
+            Assert.AreEqual(3, commits.Count);
+            CollectionAssert.AreEqual(new[] { "change f", "add a", "base" }, commits.Commits.Select(commit => commit.Subject));
+        }
+
         private static TestRepository CreateFeatureBranch()
         {
             var repo = TestRepository.Create();

@@ -17,6 +17,8 @@ namespace Upwake.Vetka
             AddItem(menu, "Checkout", !branch.IsCurrent, () => Checkout(git, branch, onCompleted));
             AddItem(menu, $"New Branch from '{shownName}'...", true,
                 () => NewBranch(git, branch.Name, branch.Ref, onCompleted));
+            AddItem(menu, $"Compare with '{shownCurrent}'", !branch.IsCurrent,
+                () => CompareBranchWindow.ShowWindow(git, branch.Ref, branch.Name));
             menu.AddSeparator("");
 
             var canIntegrate = currentName != null && !branch.IsCurrent;

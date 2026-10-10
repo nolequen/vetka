@@ -577,23 +577,85 @@ namespace Upwake.Vetka
                 head = resolved.Output;
             }
 
-            var result = Run("log", "--skip=" + skip, "-n", count.ToString(),
-                "--pretty=format:%h%x1f%an%x1f%ad%x1f%D%x1f%s", "--decorate=short", "--decorate-refs=refs/tags/",
-                "--date=short", head, "--");
+            var result = Run(new[] { "log", "--skip=" + skip, "-n", count.ToString() }
+                .Concat(CommitFormat)
+                .Concat(new[] { head, "--" })
+                .ToArray());
             if (!result.IsSuccess)
             {
                 return (result, none, head);
             }
 
             var outgoing = new HashSet<string>(OutgoingCommitHashes(head, skip + count));
+            return (result, ParseCommits(result.Output, outgoing), head);
+        }
 
-            return (result, result.Output
-                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+        private static readonly string[] CommitFormat =
+        {
+            "--pretty=format:%h%x1f%an%x1f%ad%x1f%D%x1f%s", "--decorate=short", "--decorate-refs=refs/tags/",
+            "--date=short"
+        };
+
+        private static List<GitCommit> ParseCommits(string output, ICollection<string> unpushed) =>
+            output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(line => line.Split(new[] { LogFieldSeparator }, 5, StringSplitOptions.None))
                 .Where(fields => fields.Length == 5)
                 .Select(fields => new GitCommit(fields[0], fields[1], fields[2], fields[4],
-                    !outgoing.Contains(fields[0]), TagNames(fields[3])))
-                .ToList(), head);
+                    !unpushed.Contains(fields[0]), TagNames(fields[3])))
+                .ToList();
+
+        public (GitResult Result, int Count, List<GitCommit> Commits) CommitsOnlyIn(string include, string exclude,
+            int limit)
+        {
+            var range = exclude != null ? new[] { include, "--not", exclude, "--" } : new[] { include, "--" };
+            var count = Run(new[] { "rev-list", "--count" }.Concat(range).ToArray());
+            if (!count.IsSuccess)
+            {
+                return (count, 0, new List<GitCommit>());
+            }
+
+            var log = Run(new[] { "log", "-n", limit.ToString() }
+                .Concat(CommitFormat)
+                .Concat(range)
+                .ToArray());
+            return log.IsSuccess
+                ? (log, int.TryParse(count.Output, out var total) ? total : 0,
+                    ParseCommits(log.Output, Array.Empty<string>()))
+                : (log, 0, new List<GitCommit>());
+        }
+
+        public (GitResult Result, List<GitFileChange> Files) DifferencesFromWorkingTree(string revision)
+        {
+            var diff = Run("diff", "--name-status", "-z", "--find-renames", revision, "--");
+            var files = new List<GitFileChange>();
+            if (!diff.IsSuccess)
+            {
+                return (diff, files);
+            }
+
+            var tokens = diff.Output.Split('\0');
+            for (var i = 0; i + 1 < tokens.Length;)
+            {
+                var status = tokens[i].Trim('\n', '\r');
+                if (status.Length == 0)
+                {
+                    i++;
+                    continue;
+                }
+
+                if ((status[0] == 'R' || status[0] == 'C') && i + 2 < tokens.Length)
+                {
+                    files.Add(new GitFileChange(ParseStatus(status.Substring(0, 1)), tokens[i + 2], tokens[i + 1]));
+                    i += 3;
+                    continue;
+                }
+
+                files.Add(new GitFileChange(ParseStatus(status.Substring(0, 1)), tokens[i + 1]));
+                i += 2;
+            }
+
+            files.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path));
+            return (diff, files);
         }
 
         private static List<string> TagNames(string decoration) =>

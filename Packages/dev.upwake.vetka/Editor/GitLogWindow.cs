@@ -425,6 +425,18 @@ namespace Upwake.Vetka
                         }
                     };
                 }
+
+                if (_logRef != null && GUILayout.Button("Compare with Current", GUILayout.ExpandWidth(false)))
+                {
+                    var git = _git ??= new Git();
+                    var reference = _logRef;
+                    var name = reference.StartsWith("refs/heads/", StringComparison.Ordinal)
+                        ? reference.Substring("refs/heads/".Length)
+                        : reference.StartsWith("refs/remotes/", StringComparison.Ordinal)
+                            ? reference.Substring("refs/remotes/".Length)
+                            : reference;
+                    EditorApplication.delayCall += () => CompareBranchWindow.ShowWindow(git, reference, name);
+                }
             }
 
             GUILayout.FlexibleSpace();
