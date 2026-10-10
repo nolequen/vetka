@@ -1888,8 +1888,10 @@ namespace Upwake.Vetka.Tests
             repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
             repo.Write("f.txt", "local\n");
             var before = repo.Snapshot();
+            var git = repo.Git;
+            git.BeforeCommand = MoveBackAfterStashing(repo, "crlf.txt");
 
-            var result = merge ? repo.Git.Integrate(UpdateStrategy.Merge, "other") : repo.Git.Checkout("other");
+            var result = merge ? git.Integrate(UpdateStrategy.Merge, "other") : git.Checkout("other");
 
             Assert.IsFalse(result.IsSuccess);
             StringAssert.StartsWith((merge ? "Merge of other" : "Checkout of other") +
@@ -1897,6 +1899,23 @@ namespace Upwake.Vetka.Tests
                                     "These files stay modified even after stashing:\n  crlf.txt\n", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
             Assert.AreEqual(0, repo.Git.Stashes().Count);
+        }
+
+        private static Action<IReadOnlyList<string>> MoveBackAfterStashing(TestRepository repo, string path)
+        {
+            var stashed = false;
+            return arguments =>
+            {
+                if (arguments.Count > 1 && arguments[0] == "stash" && arguments[1] == "push")
+                {
+                    stashed = true;
+                }
+                else if (stashed && arguments[0] == "status" && arguments.Contains("--ignore-submodules=all"))
+                {
+                    stashed = false;
+                    File.SetLastWriteTimeUtc(Path.Combine(repo.Root, path), DateTime.UtcNow.AddMinutes(-1));
+                }
+            };
         }
 
         [TestCase(false)]
@@ -2357,8 +2376,10 @@ namespace Upwake.Vetka.Tests
             repo.Write("f.txt", "local\n");
             var git = repo.Git;
             var saved = false;
+            var moveBack = MoveBackAfterStashing(repo, "crlf.txt");
             git.BeforeCommand = arguments =>
             {
+                moveBack(arguments);
                 if (!saved && arguments[0] == "status" && arguments.Contains("--ignore-submodules=all"))
                 {
                     saved = true;
@@ -2389,8 +2410,10 @@ namespace Upwake.Vetka.Tests
             repo.RunGit("commit", "-q", "-m", "attributes");
             repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
             repo.Write("f.txt", "local\n");
+            var git = repo.Git;
+            git.BeforeCommand = MoveBackAfterStashing(repo, "crlf.txt");
 
-            var result = repo.Git.Stash("mine", false);
+            var result = git.Stash("mine", false);
 
             Assert.IsFalse(result.IsSuccess);
             StringAssert.StartsWith("Changes stashed: mine\nThese files stay modified after stashing:\n  crlf.txt\n",
