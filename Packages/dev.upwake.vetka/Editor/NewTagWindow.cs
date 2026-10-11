@@ -11,23 +11,30 @@ namespace Upwake.Vetka
         private string _commit;
         private string _name = "";
         private string _message = "";
-        private (string Name, string Message)? _answer;
+        private Action<string, string> _onCreate;
         [NonSerialized] private bool _focused;
         [NonSerialized] private GUIStyle _messageStyle;
 
-        public static (string Name, string Message)? Ask(string commit)
+        public static void Show(string commit, Action<string, string> callback)
         {
             var window = CreateInstance<NewTagWindow>();
             window._commit = commit;
-            return ModalDialog.Show(window, "New Tag", new Vector2(420, 200), fixedSize: false) ? window._answer : null;
+            window._onCreate = callback;
+            UtilityDialog.Show(window, "New Tag", new Vector2(420, 200), fixedSize: false);
         }
 
         private void OnGUI()
         {
+            if (_onCreate == null)
+            {
+                UtilityDialog.Close(this);
+                return;
+            }
+
             _messageStyle ??= new GUIStyle(EditorStyles.textArea) { wordWrap = true };
             var current = Event.current;
-            var submit = GUI.GetNameOfFocusedControl() == NameField && ModalDialog.Submitted(current);
-            var cancel = ModalDialog.Cancelled(current);
+            var submit = GUI.GetNameOfFocusedControl() == NameField && UtilityDialog.Submitted(current);
+            var cancel = UtilityDialog.Cancelled(current);
 
             EditorGUILayout.LabelField($"On {_commit}", EditorStyles.wordWrappedLabel);
 
@@ -50,14 +57,18 @@ namespace Upwake.Vetka
             {
                 if (GUILayout.Button("Create", GUILayout.Width(80)) || submit && valid)
                 {
-                    _answer = (_name.Trim(), _message);
-                    ModalDialog.Close(this);
+                    var callback = _onCreate;
+                    var name = _name.Trim();
+                    var message = _message;
+                    _onCreate = null;
+                    UtilityDialog.Close(this, () => callback(name, message));
                 }
             }
 
             if (GUILayout.Button("Cancel", GUILayout.Width(80)) || cancel)
             {
-                ModalDialog.Close(this);
+                _onCreate = null;
+                UtilityDialog.Close(this);
             }
 
             EditorGUILayout.EndHorizontal();

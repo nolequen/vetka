@@ -41,76 +41,6 @@ namespace Upwake.Vetka
 
         private static bool Verbose => GitSettings.VerboseLogging;
 
-        public static string GetSystemGitPath()
-        {
-            var gitFromPath = FindGitInPath();
-            if (!string.IsNullOrEmpty(gitFromPath))
-            {
-                return gitFromPath;
-            }
-
-            var gitFromStandardPaths = FindGitInStandardPaths();
-            return !string.IsNullOrEmpty(gitFromStandardPaths) ? gitFromStandardPaths : null;
-        }
-
-        private static bool IsWindows => Path.DirectorySeparatorChar == '\\';
-
-        private static string FindGitInPath()
-        {
-            var name = IsWindows ? "git.exe" : "git";
-            var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-            foreach (var entry in path.Split(Path.PathSeparator))
-            {
-                var directory = entry.Trim().Trim('"');
-                if (directory.Length == 0)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    var candidate = Path.Combine(directory, name);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                }
-            }
-
-            return null;
-        }
-
-        private static string FindGitInStandardPaths()
-        {
-            var localPrograms = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Git");
-            var scoop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "scoop", "shims");
-            var standardPaths = IsWindows
-                ? new[]
-                {
-                    Path.Combine(localPrograms, "cmd", "git.exe"),
-                    Path.Combine(scoop, "git.exe"),
-                    @"C:\Program Files\Git\bin\git.exe",
-                    @"C:\Program Files\Git\cmd\git.exe",
-                    @"C:\Program Files (x86)\Git\bin\git.exe",
-                    @"C:\Program Files (x86)\Git\cmd\git.exe",
-                    @"C:\Git\bin\git.exe",
-                    @"C:\Git\cmd\git.exe"
-                }
-                : new[]
-                {
-                    "/usr/bin/git",
-                    "/usr/local/bin/git",
-                    "/opt/homebrew/bin/git",
-                    "/Applications/Xcode.app/Contents/Developer/usr/bin/git"
-                };
-
-            return standardPaths.FirstOrDefault(File.Exists);
-        }
-
         public GitResult Version()
         {
             var version = Run("--version");
@@ -287,7 +217,7 @@ namespace Upwake.Vetka
             }
             catch (Exception exception)
             {
-                Debug.LogWarning($"Vetka: cannot delete a temporary file {path}: {exception.Message}");
+                Debug.LogWarning($"Vetka: cannot delete {path}: {exception.Message}");
             }
         }
 

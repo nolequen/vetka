@@ -47,22 +47,18 @@ namespace Upwake.Vetka
 
         public static void NewBranch(Git git, string startName, string startRef)
         {
-            var answer = NewBranchWindow.Ask(startName);
-            if (answer == null)
+            NewBranchWindow.Show(startName, (name, checkout) =>
             {
-                return;
-            }
-
-            var (name, checkout) = answer.Value;
-            if (checkout)
-            {
-                Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, true, startName));
-            }
-            else
-            {
-                GitOperations.Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, false, startName),
-                    Notification.Show);
-            }
+                if (checkout)
+                {
+                    Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, true, startName));
+                }
+                else
+                {
+                    GitOperations.Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, false, startName),
+                        Notification.Show);
+                }
+            });
         }
 
         public static void Integrate(Git git, UpdateStrategy strategy, GitBranch branch)

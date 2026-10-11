@@ -267,22 +267,17 @@ namespace Upwake.Vetka
             var added = shown.Count(change => change.Status == GitStatus.Added);
             var count = shown.Select(change => change.Path).Distinct().Count();
             var files = count == 1 ? Git.FileName(shown[0].Path) : $"{count} files";
-            var deleteAdded = RollbackDialog.Ask($"Rollback {files}?", added);
-            if (deleteAdded == null)
-            {
-                return;
-            }
-
             var git = new Git();
-            GitOperations.Run("Git: rolling back changes", () => git.Rollback(changes, deleteAdded.Value, count), result =>
-            {
-                if (result.IsSuccess)
+            RollbackDialog.Show($"Rollback {files}?", added, deleteAdded =>
+                GitOperations.Run("Git: rolling back changes", () => git.Rollback(changes, deleteAdded, count), result =>
                 {
-                    ChangesSelection.instance.Forget(Git.WithOldPaths(changes));
-                }
+                    if (result.IsSuccess)
+                    {
+                        ChangesSelection.instance.Forget(Git.WithOldPaths(changes));
+                    }
 
-                Notification.Show(result);
-            }, changesTree: true);
+                    Notification.Show(result);
+                }, changesTree: true));
         }
 
         private static void CreatePatch(List<string> files)

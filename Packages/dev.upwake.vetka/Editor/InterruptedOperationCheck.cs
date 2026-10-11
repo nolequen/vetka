@@ -1,5 +1,3 @@
-using System;
-using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -22,8 +20,7 @@ namespace Upwake.Vetka
         private static void Check()
         {
             var git = new Git();
-            GitOperations.Read("Git: checking for an interrupted operation",
-                () => (Found: git.InterruptedOperation(), Pending: git.InterruptionPending()),
+            GitOperations.Read("Git: checking for an interrupted operation", git.Interruption,
                 result => Report(result.Found, result.Pending));
         }
 
@@ -70,14 +67,7 @@ namespace Upwake.Vetka
             }
 
             var open = EditorUtility.DisplayDialog("Git", message, "Open Stash Window", "Close");
-            try
-            {
-                File.Delete(found.MarkerPath);
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning($"Vetka: cannot delete {found.MarkerPath}: {exception.Message}");
-            }
+            Git.DismissInterruption(found);
 
             if (open)
             {

@@ -1,3 +1,4 @@
+using System;
 using UnityEditor;
 using UnityEngine;
 
@@ -8,7 +9,7 @@ namespace Upwake.Vetka
         private string _question;
         private int _added;
         private bool _deleteAdded;
-        private bool? _answer;
+        private Action<bool> _onConfirm;
 
         private static GUIStyle _paddingStyle;
 
@@ -17,19 +18,26 @@ namespace Upwake.Vetka
             padding = new RectOffset(10, 10, 8, 10)
         };
 
-        public static bool? Ask(string question, int added)
+        public static void Show(string question, int added, Action<bool> onConfirm)
         {
             var window = CreateInstance<RollbackDialog>();
             window._question = question;
             window._added = added;
-            return ModalDialog.Show(window, "Rollback", new Vector2(380, added > 0 ? 112 : 92)) ? window._answer : null;
+            window._onConfirm = onConfirm;
+            UtilityDialog.Show(window, "Rollback", new Vector2(380, added > 0 ? 112 : 92));
         }
 
         private void OnGUI()
         {
+            if (_onConfirm == null)
+            {
+                UtilityDialog.Close(this);
+                return;
+            }
+
             var current = Event.current;
-            var submit = ModalDialog.Submitted(current);
-            var cancel = ModalDialog.Cancelled(current);
+            var submit = UtilityDialog.Submitted(current);
+            var cancel = UtilityDialog.Cancelled(current);
 
             using (new EditorGUILayout.VerticalScope(PaddingStyle))
             {
@@ -52,13 +60,16 @@ namespace Upwake.Vetka
 
                     if (GUILayout.Button("Rollback", GUILayout.Width(90)) || submit)
                     {
-                        _answer = _deleteAdded;
-                        ModalDialog.Close(this);
+                        var callback = _onConfirm;
+                        var deleteAdded = _deleteAdded;
+                        _onConfirm = null;
+                        UtilityDialog.Close(this, () => callback(deleteAdded));
                     }
 
                     if (GUILayout.Button("Cancel", GUILayout.Width(80)) || cancel)
                     {
-                        ModalDialog.Close(this);
+                        _onConfirm = null;
+                        UtilityDialog.Close(this);
                     }
                 }
             }

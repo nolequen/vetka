@@ -15,15 +15,10 @@ namespace Upwake.Vetka
 
         public GitResult UpdateProject(UpdateStrategy strategy)
         {
-            var branch = CurrentBranch(out var branchError);
+            var branch = CheckedOutBranch("update", out var refusal);
             if (branch == null)
             {
-                return branchError;
-            }
-
-            if (branch == "HEAD")
-            {
-                return GitResult.Failure("Cannot update: no branch is checked out");
+                return refusal;
             }
 
             var before = FetchedRefs();
@@ -121,9 +116,7 @@ namespace Upwake.Vetka
                     return recreated.IsSuccess && !mergeWarned ? GitResult.Success(text) : GitResult.Done(text);
                 }
 
-                return recreated.IsCancelled
-                    ? GitResult.Cancelled($"{merged}{gone}, push cancelled")
-                    : GitResult.Failure($"{merged}{gone}, but the push failed\n{recreated.Message}");
+                return NotPushed($"{merged}{gone}", recreated);
             }
 
             string updated = null;
@@ -152,25 +145,40 @@ namespace Upwake.Vetka
                 return push.IsSuccess && !warned ? GitResult.Success(text) : GitResult.Done(text);
             }
 
-            return push.IsCancelled
-                ? GitResult.Cancelled(warned ? $"{updated}\nPush cancelled" : $"{updated}, push cancelled")
-                : GitResult.Failure(warned
-                    ? $"{updated}\nThe push failed\n{push.Message}"
-                    : $"{updated}, but the push failed\n{push.Message}");
+            return NotPushed(updated, push, warned);
+        }
+
+        private static GitResult NotPushed(string done, GitResult push, bool onNewLine = false)
+        {
+            if (push.IsCancelled)
+            {
+                return GitResult.Cancelled(onNewLine ? $"{done}\nPush cancelled" : $"{done}, push cancelled");
+            }
+
+            var failed = onNewLine
+                ? $"{done}\nThe push failed\n{push.Message}"
+                : $"{done}, but the push failed\n{push.Message}";
+            return push.IsRejected ? GitResult.Rejected(failed) : GitResult.Failure(failed);
+        }
+
+        private string CheckedOutBranch(string verb, out GitResult refusal)
+        {
+            var branch = CurrentBranch(out refusal);
+            if (branch != "HEAD")
+            {
+                return branch;
+            }
+
+            refusal = GitResult.Failure($"Cannot {verb}: no branch is checked out");
+            return null;
         }
 
         public GitResult Integrate(UpdateStrategy strategy, string target, string name = null)
         {
             name ??= target;
-            var branch = CurrentBranch(out var branchError);
-            if (branch == null)
+            if (CheckedOutBranch(strategy.ToString().ToLowerInvariant(), out var refusal) == null)
             {
-                return branchError;
-            }
-
-            if (branch == "HEAD")
-            {
-                return GitResult.Failure($"Cannot {strategy.ToString().ToLowerInvariant()}: no branch is checked out");
+                return refusal;
             }
 
             var unborn = !HasHead();
@@ -194,7 +202,6 @@ namespace Upwake.Vetka
             var done = strategy == UpdateStrategy.Rebase
                 ? $"Rebased onto {name}: {Texts.Counted(incoming, "new commit")}"
                 : $"Merged {Texts.Counted(incoming, "commit")} from {name}";
-            var command = strategy == UpdateStrategy.Rebase ? "rebase" : "merge";
             var argument = ShortName(target);
 
             return WithLocalChangesSaved(new TreeChange
@@ -203,20 +210,10 @@ namespace Upwake.Vetka
                 Target = target,
                 ThreeWay = strategy == UpdateStrategy.Merge,
                 Done = done,
-                Restored = "local changes restored",
+                Command = strategy == UpdateStrategy.Rebase ? "rebase" : "merge",
                 Apply = () => unborn ? Run("merge", "--ff-only", "--no-stat", argument)
                     : strategy == UpdateStrategy.Rebase ? Run("rebase", argument)
-                    : Run("merge", "--no-stat", "--no-edit", argument),
-                Abort = () => Run(command, "--abort"),
-                Quit = () => Run(command, "--quit"),
-                Remember = head => new ReturnPoint
-                {
-                    Name = head,
-                    Head = head,
-                    Branch = branch,
-                    GoBack = () => Run("reset", "--hard", "--quiet", head),
-                    GoBackKeepingChanges = () => Run("reset", "--keep", "--quiet", head)
-                }
+                    : Run("merge", "--no-stat", "--no-edit", argument)
             });
         }
 
@@ -227,15 +224,10 @@ namespace Upwake.Vetka
         private GitResult ApplyCommit(string commit, bool revert)
         {
             var verb = revert ? "revert" : "cherry-pick";
-            var branch = CurrentBranch(out var branchError);
+            var branch = CheckedOutBranch(verb, out var refusal);
             if (branch == null)
             {
-                return branchError;
-            }
-
-            if (branch == "HEAD")
-            {
-                return GitResult.Failure($"Cannot {verb}: no branch is checked out");
+                return refusal;
             }
 
             if (!HasHead())
@@ -290,7 +282,7 @@ namespace Upwake.Vetka
                 Target = revert ? parent : commit,
                 IncomingFrom = revert ? commit : parent,
                 Done = revert ? $"Reverted {shown}" : $"Cherry-picked {shown} into {branch}",
-                Restored = "local changes restored",
+                Command = verb,
                 Apply = () =>
                 {
                     var applied = revert ? Run("revert", "--no-edit", commit) : Run("cherry-pick", commit);
@@ -300,16 +292,6 @@ namespace Upwake.Vetka
                             ? $"Its changes are already undone in {branch}"
                             : $"Its changes are already in {branch}")
                         : applied;
-                },
-                Abort = () => Run(verb, "--abort"),
-                Quit = () => Run(verb, "--quit"),
-                Remember = head => new ReturnPoint
-                {
-                    Name = head,
-                    Head = head,
-                    Branch = branch,
-                    GoBack = () => Run("reset", "--hard", "--quiet", head),
-                    GoBackKeepingChanges = () => Run("reset", "--keep", "--quiet", head)
                 }
             });
         }
@@ -335,21 +317,42 @@ namespace Upwake.Vetka
             public string IncomingFrom;
             public bool ThreeWay;
             public string Done;
-            public string Restored;
+            public string Command;
+            public string ExpectedBranch;
+            public string CreatedBranch;
             public Func<GitResult> Apply;
-            public Func<GitResult> Abort;
-            public Func<GitResult> Quit;
-            public Func<bool> Arrived;
-            public Func<string, ReturnPoint> Remember;
+
+            public bool Switches => Command == null;
+
+            public string Restored => Switches ? "local changes carried over" : "local changes restored";
         }
 
         private sealed class ReturnPoint
         {
-            public string Name;
             public string Head;
             public string Branch;
-            public Func<GitResult> GoBack;
-            public Func<GitResult> GoBackKeepingChanges;
+        }
+
+        private GitResult GoBack(ReturnPoint start, TreeChange change, bool discard) =>
+            change.Switches
+                ? SwitchBack(start.Branch, start.Head, change.CreatedBranch, discard)
+                : Run("reset", discard ? "--hard" : "--keep", "--quiet", start.Head);
+
+        private static string Destination(ReturnPoint start, TreeChange change) =>
+            change.Switches ? start.Branch : start.Head;
+
+        private bool Arrived(TreeChange change) =>
+            CurrentBranch() == change.ExpectedBranch && HeadCommit() == change.TargetCommit;
+
+        private string IncomingBase(TreeChange change, string head)
+        {
+            if (change.IncomingFrom != null || !change.ThreeWay)
+            {
+                return change.IncomingFrom;
+            }
+
+            var mergeBase = Run("merge-base", head, change.TargetCommit);
+            return mergeBase.IsSuccess ? mergeBase.Output : null;
         }
 
         private static readonly (string Path, string Name)[] OperationsInProgress =
@@ -390,11 +393,13 @@ namespace Upwake.Vetka
                 return plain.IsSuccess ? GitResult.Success(change.Done) : plain;
             }
 
-            var start = change.Remember(head);
-            if (start == null)
+            var branch = CurrentBranch();
+            if (string.IsNullOrEmpty(branch))
             {
                 return GitResult.Failure("Cannot read the current branch");
             }
+
+            var start = new ReturnPoint { Head = head, Branch = branch };
 
             change.TargetCommit = CommitOf(change.Target);
             if (change.TargetCommit == null)
@@ -467,7 +472,7 @@ namespace Upwake.Vetka
             {
                 result = Completed(change, start, stash, baseline);
             }
-            else if (change.Arrived != null && Conflicts().Count == 0 && change.Arrived())
+            else if (change.Switches && Conflicts().Count == 0 && Arrived(change))
             {
                 var completed = Completed(change, start, stash, baseline);
                 result = GitResult.Failure($"{completed.Message}\n" +
@@ -495,13 +500,7 @@ namespace Upwake.Vetka
                 return new List<string>();
             }
 
-            var from = change.IncomingFrom;
-            if (from == null && change.ThreeWay)
-            {
-                var mergeBase = Run("merge-base", head, change.TargetCommit);
-                from = mergeBase.IsSuccess ? mergeBase.Output : null;
-            }
-
+            var from = IncomingBase(change, head);
             var incoming = from != null ? Touched(from, change.TargetCommit) : null;
             if (incoming != null)
             {
@@ -656,11 +655,11 @@ namespace Upwake.Vetka
                     $"{change.Done}, but local changes were not restored\n{StashKept(stash)}\n{restore.Message}{stayModified}");
             }
 
-            var undone = !UndoRestore(stash, baseline, conflicts).HasValue;
-            var back = undone ? start.GoBackKeepingChanges() : start.GoBack();
+            var undone = !UndoStashApply(stash, baseline, conflicts, Array.Empty<string>()).HasValue;
+            var back = GoBack(start, change, !undone);
             if (!back.IsSuccess && undone && modified.Count > 0 && OnlyChanged(baseline, modified))
             {
-                back = start.GoBack();
+                back = GoBack(start, change, true);
             }
 
             var message = new StringBuilder();
@@ -670,7 +669,7 @@ namespace Upwake.Vetka
             message.AppendLine(ConflictList(conflicts));
             if (!back.IsSuccess)
             {
-                message.AppendLine($"Could not return to {start.Name}. {StashKept(stash)}");
+                message.AppendLine($"Could not return to {Destination(start, change)}. {StashKept(stash)}");
                 message.AppendLine(back.Message);
                 return GitResult.Failure(message.ToString().TrimEnd());
             }
@@ -685,7 +684,8 @@ namespace Upwake.Vetka
             return now != null && Added(now.Changed, baseline.Changed).All(paths.Contains);
         }
 
-        private GitResult? UndoRestore(string stash, TreeState baseline, List<string> conflicts)
+        private GitResult? UndoStashApply(string stash, TreeState before, List<string> conflicts,
+            IEnumerable<string> alsoReset)
         {
             var paths = StashPaths(stash);
             var now = ReadTree();
@@ -694,10 +694,10 @@ namespace Upwake.Vetka
                 return GitResult.Failure("The changed files cannot be read");
             }
 
-            var applied = new HashSet<string>(paths.Concat(RenamedSince(stash, paths)).Concat(conflicts),
+            var applied = new HashSet<string>(paths.Concat(RenamedSince(stash, paths)).Concat(conflicts).Concat(alsoReset),
                 StringComparer.Ordinal);
             return ResetToHead(now.Changed.Concat(conflicts).Where(applied.Contains).Distinct().ToList(),
-                path => !baseline.Untracked.Contains(path));
+                path => !before.Untracked.Contains(path));
         }
 
         private HashSet<string> Missing(IEnumerable<string> paths)
@@ -740,12 +740,8 @@ namespace Upwake.Vetka
         private GitResult RolledBackInUse(TreeChange change, ReturnPoint start, string stash, List<string> stale,
             List<string> unwritten)
         {
-            var back = RunWithPathspecs(null, stale.Concat(unwritten), "add");
-            if (back.IsSuccess)
-            {
-                back = start.GoBack();
-            }
-
+            var staged = RunWithPathspecs(null, stale.Concat(unwritten), "add");
+            var back = staged.IsSuccess ? GoBack(start, change, true) : staged;
             var message = new StringBuilder();
             if (!back.IsSuccess)
             {
@@ -757,10 +753,17 @@ namespace Upwake.Vetka
 
                 if (unwritten.Count > 0)
                 {
-                    message.AppendLine(FileList($"{change.Done}, but these files could not be written", unwritten));
+                    message.AppendLine(FileList(stale.Count > 0
+                        ? "These files could not be written"
+                        : $"{change.Done}, but these files could not be written", unwritten));
                 }
 
-                message.AppendLine($"Could not return to {start.Name}");
+                if (staged.IsSuccess)
+                {
+                    message.AppendLine("These files are staged as they are on disk");
+                }
+
+                message.AppendLine($"Could not return to {Destination(start, change)}");
                 message.AppendLine(back.Message);
                 if (stash != null)
                 {
@@ -801,7 +804,7 @@ namespace Upwake.Vetka
             var top = TopLevel();
             using var saves = new FileBackup(top.IsSuccess ? top.Output : _projectRoot);
             var notSaved = saves.Save(WrittenMeanwhile(conflicts, baseline));
-            if (notSaved != null && change.Abort != null)
+            if (notSaved != null && !change.Switches)
             {
                 var kept = new StringBuilder();
                 kept.AppendLine($"{change.Description} failed and was not undone, " +
@@ -823,8 +826,7 @@ namespace Upwake.Vetka
                 return GitResult.Failure(kept.ToString().TrimEnd());
             }
 
-            var abort = change.Abort?.Invoke();
-            var (problem, note) = Unreturned(change, start, baseline, abort, saves);
+            var (problem, note) = Unreturned(change, start, baseline, saves);
             var restore = problem == null && stash != null
                 ? RestoreLocalChanges(stash)
                 : ((GitResult Result, bool WithoutStaging)?)null;
@@ -877,24 +879,25 @@ namespace Upwake.Vetka
         }
 
         private (string Problem, string Note) Unreturned(TreeChange change, ReturnPoint start, TreeState baseline,
-            GitResult? abort, FileBackup saves)
+            FileBackup saves)
         {
+            var abort = change.Switches ? (GitResult?)null : Run(change.Command, "--abort");
             var (state, inProgress) = OperationInProgress();
-            if (inProgress != null && change.Abort != null)
+            if (inProgress != null && !change.Switches)
             {
-                abort = change.Abort();
+                abort = Run(change.Command, "--abort");
                 (state, inProgress) = OperationInProgress();
             }
 
-            if (inProgress != null && change.Quit != null)
+            if (inProgress != null && !change.Switches)
             {
-                abort = Run("reset", "--hard", "--quiet", start.Head);
+                abort = GoBack(start, change, true);
                 if (abort.Value.IsSuccess && OperationInProgress().Name != null)
                 {
-                    abort = change.Quit();
+                    abort = Run(change.Command, "--quit");
                 }
 
-                if (abort.Value.IsSuccess && start.Branch != null && CurrentBranch() != start.Branch)
+                if (abort.Value.IsSuccess && CurrentBranch() != start.Branch)
                 {
                     abort = SwitchBack(start.Branch, start.Head, null, false);
                 }
@@ -933,7 +936,7 @@ namespace Upwake.Vetka
             }
 
             var branch = CurrentBranch();
-            if (start.Branch != null && branch != start.Branch)
+            if (branch != start.Branch)
             {
                 return ($"The current branch is {branch ?? "unknown"} instead of {start.Branch}", null);
             }
@@ -951,12 +954,8 @@ namespace Upwake.Vetka
                 return (null, null);
             }
 
-            var different = DifferentFrom(change.TargetCommit ?? change.Target, created);
-            var mergeBase = change.ThreeWay
-                ? Run("merge-base", start.Head, change.TargetCommit)
-                : GitResult.Failure("No merge base");
-            var touched = Touched(change.IncomingFrom ?? (mergeBase.IsSuccess ? mergeBase.Output : start.Head),
-                change.TargetCommit);
+            var different = DifferentFrom(change.TargetCommit, created);
+            var touched = Touched(IncomingBase(change, start.Head) ?? start.Head, change.TargetCommit);
             if (different == null || touched == null)
             {
                 return (FileList("Files changed while it ran", changed.Concat(created)), null);
@@ -1114,12 +1113,12 @@ namespace Upwake.Vetka
             }
         }
 
-        public GitInterruption? InterruptedOperation()
+        public (GitInterruption? Found, bool Pending) Interruption()
         {
             var path = InterruptionMarkerPath();
             if (path == null || !File.Exists(path))
             {
-                return null;
+                return (null, false);
             }
 
             string[] lines;
@@ -1130,19 +1129,19 @@ namespace Upwake.Vetka
             catch (Exception exception)
             {
                 Debug.LogWarning($"Vetka: cannot read {path}: {exception.Message}");
-                return null;
+                return (null, File.Exists(path));
             }
 
             if (lines.Length < 2)
             {
                 DeleteTempFile(path);
-                return null;
+                return (null, File.Exists(path));
             }
 
             var (list, stashes) = StashList();
             if (!list.IsSuccess)
             {
-                return null;
+                return (null, File.Exists(path));
             }
 
             var hash = lines[1];
@@ -1157,12 +1156,14 @@ namespace Upwake.Vetka
                     DeleteTempFile(path);
                 }
 
-                return null;
+                return (null, File.Exists(path));
             }
 
-            return new GitInterruption(lines[0], lines.Length > 2 ? lines[2] : "", stash.Reference, stash.Message,
-                OperationInProgress().Name, path);
+            return (new GitInterruption(lines[0], lines.Length > 2 ? lines[2] : "", stash.Reference, stash.Message,
+                OperationInProgress().Name, path), true);
         }
+
+        public static void DismissInterruption(GitInterruption found) => DeleteTempFile(found.MarkerPath);
 
         private List<string> Conflicts() => NulSeparated(Run("diff", "--name-only", "-z", "--diff-filter=U").Output);
 
@@ -1185,17 +1186,11 @@ namespace Upwake.Vetka
             return (withIndex, false);
         }
 
-        public bool InterruptionPending()
-        {
-            var path = InterruptionMarkerPath();
-            return path != null && File.Exists(path);
-        }
-
         private GitResult DropStashEntry(string stash)
         {
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var reference = Stashes().FirstOrDefault(current => current.Hash == stash).Reference;
+                var reference = StashReference(stash);
                 if (reference == null)
                 {
                     return GitResult.Success("");
@@ -1238,9 +1233,7 @@ namespace Upwake.Vetka
 
         private string StashKept(string stash)
         {
-            var reference = string.IsNullOrEmpty(stash)
-                ? null
-                : Stashes().FirstOrDefault(current => current.Hash == stash).Reference;
+            var reference = StashReference(stash);
             return reference == null || reference == "stash@{0}"
                 ? StashKeptText
                 : $"Local changes are kept in the stash as {reference}, restore them with git stash pop {reference}";
@@ -1378,30 +1371,15 @@ namespace Upwake.Vetka
             string createdBranch, params string[] arguments)
         {
             var switchArguments = new[] { "switch" }.Concat(arguments).ToArray();
-            var change = new TreeChange
+            return WithLocalChangesSaved(new TreeChange
             {
                 Description = description,
                 Target = target,
                 Done = done,
-                Restored = "local changes carried over",
+                ExpectedBranch = expectedBranch,
+                CreatedBranch = createdBranch,
                 Apply = () => Run(switchArguments)
-            };
-            change.Arrived = () => CurrentBranch() == expectedBranch && HeadCommit() == change.TargetCommit;
-            change.Remember = head =>
-            {
-                var original = CurrentBranch();
-                return string.IsNullOrEmpty(original)
-                    ? null
-                    : new ReturnPoint
-                    {
-                        Name = original,
-                        Head = head,
-                        Branch = original,
-                        GoBack = () => SwitchBack(original, head, createdBranch, true),
-                        GoBackKeepingChanges = () => SwitchBack(original, head, createdBranch, false)
-                    };
-            };
-            return WithLocalChangesSaved(change);
+            });
         }
 
         private GitResult SwitchBack(string original, string originalHead, string createdBranch, bool discard)

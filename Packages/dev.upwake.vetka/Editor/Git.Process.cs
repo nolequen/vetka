@@ -295,7 +295,7 @@ namespace Upwake.Vetka
                     return;
                 }
 
-                if (IsWindows)
+                if (GitExecutable.IsWindows)
                 {
                     using var taskkill = Process.Start(new ProcessStartInfo
                     {
@@ -343,7 +343,7 @@ namespace Upwake.Vetka
 
             public static ProcessJob Attach(Process process)
             {
-                if (!IsWindows)
+                if (!GitExecutable.IsWindows)
                 {
                     return null;
                 }

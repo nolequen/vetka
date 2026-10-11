@@ -11,21 +11,28 @@ namespace Upwake.Vetka
         private string _startPoint;
         private string _name = "";
         private bool _checkout = true;
-        private (string Name, bool Checkout)? _answer;
+        private Action<string, bool> _onCreate;
         [NonSerialized] private bool _focused;
 
-        public static (string Name, bool Checkout)? Ask(string startPoint)
+        public static void Show(string startPoint, Action<string, bool> callback)
         {
             var window = CreateInstance<NewBranchWindow>();
             window._startPoint = startPoint;
-            return ModalDialog.Show(window, "New Branch", new Vector2(380, 105)) ? window._answer : null;
+            window._onCreate = callback;
+            UtilityDialog.Show(window, "New Branch", new Vector2(380, 105));
         }
 
         private void OnGUI()
         {
+            if (_onCreate == null)
+            {
+                UtilityDialog.Close(this);
+                return;
+            }
+
             var current = Event.current;
-            var submit = ModalDialog.Submitted(current);
-            var cancel = ModalDialog.Cancelled(current);
+            var submit = UtilityDialog.Submitted(current);
+            var cancel = UtilityDialog.Cancelled(current);
 
             EditorGUILayout.LabelField($"From {_startPoint}", EditorStyles.wordWrappedLabel);
 
@@ -49,14 +56,18 @@ namespace Upwake.Vetka
             {
                 if (GUILayout.Button("Create", GUILayout.Width(80)) || submit && valid)
                 {
-                    _answer = (_name.Trim(), _checkout);
-                    ModalDialog.Close(this);
+                    var callback = _onCreate;
+                    var name = _name.Trim();
+                    var checkout = _checkout;
+                    _onCreate = null;
+                    UtilityDialog.Close(this, () => callback(name, checkout));
                 }
             }
 
             if (GUILayout.Button("Cancel", GUILayout.Width(80)) || cancel)
             {
-                ModalDialog.Close(this);
+                _onCreate = null;
+                UtilityDialog.Close(this);
             }
 
             EditorGUILayout.EndHorizontal();

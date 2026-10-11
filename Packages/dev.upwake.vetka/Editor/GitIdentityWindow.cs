@@ -12,7 +12,8 @@ namespace Upwake.Vetka
         private string _name = "";
         private string _email = "";
         private bool _global = true;
-        private (GitIdentity Identity, bool Global)? _answer;
+        private Action<GitIdentity, bool> _onSubmit;
+        private Action _onCancel;
         [NonSerialized] private bool _focused;
 
         public static void Ensure(Git git, Action proceed, Action stopped = null)
@@ -41,16 +42,7 @@ namespace Upwake.Vetka
                     var noLocal = string.IsNullOrEmpty(local.Name) && string.IsNullOrEmpty(local.Email);
                     var prefill = noLocal ? identities.Global : local;
 
-                    EditorApplication.delayCall += () =>
-                    {
-                        var answer = Ask(prefill, noLocal && identities.Global.IsComplete);
-                        if (answer == null)
-                        {
-                            stopped?.Invoke();
-                            return;
-                        }
-
-                        var (entered, global) = answer.Value;
+                    Show(prefill, noLocal && identities.Global.IsComplete, (entered, global) =>
                         GitOperations.Run(
                             "Git: saving the user identity",
                             () => git.SetIdentity(entered, global, global ? identities.Global : local),
@@ -65,8 +57,7 @@ namespace Upwake.Vetka
 
                                 settings.UseGlobalIdentity = global;
                                 proceed();
-                            });
-                    };
+                            }), stopped);
                 },
                 reason =>
                 {
@@ -79,20 +70,29 @@ namespace Upwake.Vetka
                 });
         }
 
-        private static (GitIdentity Identity, bool Global)? Ask(GitIdentity current, bool global)
+        private static void Show(GitIdentity current, bool global, Action<GitIdentity, bool> callback,
+            Action cancelled)
         {
             var window = CreateInstance<GitIdentityWindow>();
             window._name = current.Name;
             window._email = current.Email;
             window._global = global;
-            return ModalDialog.Show(window, "Git User", new Vector2(420, 165)) ? window._answer : null;
+            window._onSubmit = callback;
+            window._onCancel = cancelled;
+            UtilityDialog.Show(window, "Git User", new Vector2(420, 165));
         }
 
         private void OnGUI()
         {
+            if (_onSubmit == null)
+            {
+                UtilityDialog.Close(this);
+                return;
+            }
+
             var current = Event.current;
-            var submit = ModalDialog.Submitted(current);
-            var cancel = ModalDialog.Cancelled(current);
+            var submit = UtilityDialog.Submitted(current);
+            var cancel = UtilityDialog.Cancelled(current);
 
             EditorGUILayout.LabelField(
                 "This repository has no user name and email of its own. Choose which ones to sign commits with.",
@@ -129,17 +129,34 @@ namespace Upwake.Vetka
             {
                 if (GUILayout.Button("Save and Continue", GUILayout.Width(125)) || submit && identity.IsComplete)
                 {
-                    _answer = (identity, _global);
-                    ModalDialog.Close(this);
+                    var callback = _onSubmit;
+                    var global = _global;
+                    _onSubmit = null;
+                    _onCancel = null;
+                    UtilityDialog.Close(this, () => callback(identity, global));
                 }
             }
 
             if (GUILayout.Button("Cancel", GUILayout.Width(80)) || cancel)
             {
-                ModalDialog.Close(this);
+                Cancel();
+                UtilityDialog.Close(this);
             }
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        private void OnDestroy() => Cancel();
+
+        private void Cancel()
+        {
+            var cancelled = _onCancel;
+            _onSubmit = null;
+            _onCancel = null;
+            if (cancelled != null)
+            {
+                EditorApplication.delayCall += () => cancelled();
+            }
         }
     }
 }

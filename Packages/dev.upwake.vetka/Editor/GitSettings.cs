@@ -36,7 +36,7 @@ namespace Upwake.Vetka
                 return;
             }
 
-            var systemGitPath = Git.GetSystemGitPath();
+            var systemGitPath = GitExecutable.Find();
             if (string.IsNullOrEmpty(systemGitPath))
             {
                 return;

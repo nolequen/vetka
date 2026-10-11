@@ -1,11 +1,12 @@
+using System;
 using UnityEditor;
 using UnityEngine;
 
 namespace Upwake.Vetka
 {
-    internal static class ModalDialog
+    internal static class UtilityDialog
     {
-        public static bool Show(EditorWindow window, string title, Vector2 size, bool fixedSize = true)
+        public static void Show(EditorWindow window, string title, Vector2 size, bool fixedSize = true)
         {
             window.titleContent = new GUIContent(title);
             var main = EditorGUIUtility.GetMainWindowPosition();
@@ -16,14 +17,8 @@ namespace Upwake.Vetka
                 window.maxSize = size;
             }
 
-            window.ShowModalUtility();
-            if (!window)
-            {
-                return true;
-            }
-
-            window.Close();
-            return false;
+            window.ShowUtility();
+            window.Focus();
         }
 
         public static bool Submitted(Event current) =>
@@ -33,10 +28,17 @@ namespace Upwake.Vetka
         public static bool Cancelled(Event current) =>
             current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape;
 
-        public static void Close(EditorWindow window)
+        public static void Close(EditorWindow window, Action then = null)
         {
-            window.Close();
-            GUIUtility.ExitGUI();
+            EditorApplication.delayCall += () =>
+            {
+                if (window)
+                {
+                    window.Close();
+                }
+
+                then?.Invoke();
+            };
         }
     }
 }

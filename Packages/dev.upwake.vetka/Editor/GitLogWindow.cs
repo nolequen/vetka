@@ -603,24 +603,20 @@ namespace Upwake.Vetka
         private void NewTag(GitCommit commit)
         {
             var git = _git ??= new Git();
-            var answer = NewTagWindow.Ask($"{commit.Hash} {commit.Subject}");
-            if (answer == null)
+            NewTagWindow.Show($"{commit.Hash} {commit.Subject}", (name, message) =>
             {
-                return;
-            }
+                void Create() => GitOperations.Run($"Git: creating tag {name}",
+                    () => git.CreateTag(name, commit.Hash, message), Notification.Show);
 
-            var (name, message) = answer.Value;
-            void Create() => GitOperations.Run($"Git: creating tag {name}",
-                () => git.CreateTag(name, commit.Hash, message), Notification.Show);
-
-            if (string.IsNullOrWhiteSpace(message))
-            {
-                Create();
-            }
-            else
-            {
-                GitIdentityWindow.Ensure(git, Create);
-            }
+                if (string.IsNullOrWhiteSpace(message))
+                {
+                    Create();
+                }
+                else
+                {
+                    GitIdentityWindow.Ensure(git, Create);
+                }
+            });
         }
 
         private void DeleteTag(string name)

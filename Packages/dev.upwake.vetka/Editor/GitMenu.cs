@@ -8,23 +8,21 @@ namespace Upwake.Vetka
         public static void UpdateProject()
         {
             var settings = GitProjectSettings.instance;
-            var strategy = (UpdateStrategy)settings.UpdateStrategy;
-            if (settings.UpdateStrategy == UpdateStrategyChoice.Ask)
+            if (settings.UpdateStrategy != UpdateStrategyChoice.Ask)
             {
-                var answer = UpdateProjectStrategyDialog.Ask();
-                if (answer == null)
-                {
-                    return;
-                }
+                UpdateProject(new Git(), (UpdateStrategy)settings.UpdateStrategy);
+                return;
+            }
 
-                strategy = answer.Value.Strategy;
-                if (answer.Value.Remember)
+            UpdateProjectStrategyDialog.Show((strategy, remember) =>
+            {
+                if (remember)
                 {
                     settings.UpdateStrategy = (UpdateStrategyChoice)strategy;
                 }
-            }
 
-            UpdateProject(new Git(), strategy);
+                UpdateProject(new Git(), strategy);
+            });
         }
 
         private static void UpdateProject(Git git, UpdateStrategy strategy)

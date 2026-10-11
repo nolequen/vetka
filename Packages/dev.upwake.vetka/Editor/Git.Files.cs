@@ -121,21 +121,15 @@ namespace Upwake.Vetka
             var push = destination.Target.HasValue
                 ? PushTo(destination.Target.Value, null, null, tags, out pushedTags)
                 : GitResult.Failure(destination.Problem);
-            if (push.IsCancelled)
+            if (!push.IsDone)
             {
-                return GitResult.Cancelled($"{CommitSummary(message, false)}, push cancelled");
+                return NotPushed(CommitSummary(message, false), push);
             }
 
-            if (push.IsDone)
-            {
-                var pushedTo = destination.Target?.Name ?? "the remote";
-                var summary = CommitSummary(message, false,
-                    pushedTags > 0 ? $"{pushedTo} with {Texts.Counted(pushedTags, "tag")}" : pushedTo);
-                return push.IsSuccess ? GitResult.Success(summary) : GitResult.Done($"{summary}\n{push.Message}");
-            }
-
-            var failed = $"{CommitSummary(message, false)}, but the push failed\n{push.Message}";
-            return push.IsRejected ? GitResult.Rejected(failed) : GitResult.Failure(failed);
+            var pushedTo = destination.Target?.Name ?? "the remote";
+            var summary = CommitSummary(message, false,
+                pushedTags > 0 ? $"{pushedTo} with {Texts.Counted(pushedTags, "tag")}" : pushedTo);
+            return push.IsSuccess ? GitResult.Success(summary) : GitResult.Done($"{summary}\n{push.Message}");
         }
 
         private string CommitSummary(string message, bool amend, string pushedTo = null)
@@ -745,153 +739,6 @@ namespace Upwake.Vetka
             return Utf8.GetString(bytes.ToArray());
         }
 
-        private sealed class FileBackup : IDisposable
-        {
-            private readonly string _root;
-            private readonly string _prefix;
-            private readonly string _directory = Path.Combine(Path.GetTempPath(), $"Vetka-{Guid.NewGuid():N}");
-            private readonly List<(string Path, string Copy)> _files = new List<(string Path, string Copy)>();
-            private readonly List<string> _createdDirectories = new List<string>();
-            private bool _keep;
-
-            public FileBackup(string root)
-            {
-                _root = root;
-                _prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
-                          Path.DirectorySeparatorChar;
-            }
-
-            public string Keep()
-            {
-                _keep = true;
-                return _directory;
-            }
-
-            public string Save(IEnumerable<string> paths)
-            {
-                try
-                {
-                    foreach (var path in paths.Distinct())
-                    {
-                        var file = Path.GetFullPath(Path.Combine(_root, path));
-                        if (!file.StartsWith(_prefix, StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
-
-                        if (!File.Exists(file))
-                        {
-                            _files.Add((path, null));
-                            RememberMissingDirectories(file);
-                            continue;
-                        }
-
-                        Directory.CreateDirectory(_directory);
-                        var copy = Path.Combine(_directory, _files.Count.ToString());
-                        File.Copy(file, copy);
-                        _files.Add((path, copy));
-                    }
-
-                    return null;
-                }
-                catch (Exception exception)
-                {
-                    return $"Cannot save a copy of the files it changes: {exception.Message}";
-                }
-            }
-
-            public List<string> Restore()
-            {
-                var failed = new List<string>();
-                foreach (var (path, copy) in _files)
-                {
-                    var file = Path.GetFullPath(Path.Combine(_root, path));
-                    try
-                    {
-                        if (copy == null)
-                        {
-                            if (File.Exists(file))
-                            {
-                                File.Delete(file);
-                            }
-
-                            continue;
-                        }
-
-                        if (File.Exists(file) && SameContent(file, copy))
-                        {
-                            continue;
-                        }
-
-                        Directory.CreateDirectory(Path.GetDirectoryName(file));
-                        if (File.Exists(file))
-                        {
-                            File.SetAttributes(file, FileAttributes.Normal);
-                        }
-
-                        File.Copy(copy, file, true);
-                    }
-                    catch (Exception)
-                    {
-                        failed.Add(path);
-                    }
-                }
-
-                foreach (var directory in _createdDirectories.OrderByDescending(directory => directory.Length))
-                {
-                    try
-                    {
-                        if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
-                        {
-                            Directory.Delete(directory);
-                        }
-                    }
-                    catch (Exception exception)
-                    {
-                        Debug.LogWarning($"Vetka: cannot delete {directory}: {exception.Message}");
-                    }
-                }
-
-                return failed;
-            }
-
-            public void Dispose()
-            {
-                try
-                {
-                    if (!_keep && Directory.Exists(_directory))
-                    {
-                        Directory.Delete(_directory, true);
-                    }
-                }
-                catch (Exception exception)
-                {
-                    Debug.LogWarning($"Vetka: cannot delete a temporary folder {_directory}: {exception.Message}");
-                }
-            }
-
-            private void RememberMissingDirectories(string file)
-            {
-                var directory = Path.GetDirectoryName(file);
-                while (!string.IsNullOrEmpty(directory) && directory.Length > _root.Length && !Directory.Exists(directory))
-                {
-                    if (!_createdDirectories.Contains(directory))
-                    {
-                        _createdDirectories.Add(directory);
-                    }
-
-                    directory = Path.GetDirectoryName(directory);
-                }
-            }
-
-            private static bool SameContent(string left, string right)
-            {
-                var first = new FileInfo(left);
-                var second = new FileInfo(right);
-                return first.Length == second.Length && File.ReadAllBytes(left).AsSpan().SequenceEqual(File.ReadAllBytes(right));
-            }
-        }
-
         private void DeleteCreatedFiles(List<string> paths)
         {
             if (paths.Count == 0)
@@ -927,21 +774,7 @@ namespace Upwake.Vetka
                 }
             }
 
-            foreach (var directory in directories.OrderByDescending(directory => directory.Length))
-            {
-                try
-                {
-                    if (Directory.Exists(directory) && !File.Exists(directory + ".meta") &&
-                        !Directory.EnumerateFileSystemEntries(directory).Any())
-                    {
-                        Directory.Delete(directory);
-                    }
-                }
-                catch (Exception exception)
-                {
-                    Debug.LogWarning($"Vetka: cannot delete {directory}: {exception.Message}");
-                }
-            }
+            FileBackup.DeleteEmptyFolders(directories, true);
         }
     }
 }

@@ -14,7 +14,7 @@ namespace Upwake.Vetka
             var branch = CurrentBranch(out var error);
             if (string.IsNullOrEmpty(branch) || branch == "HEAD")
             {
-                return (branch, null, branch == null ? error.Message : "No branch is checked out");
+                return (branch, null, branch == null ? error.Message : "Cannot push: no branch is checked out");
             }
 
             var target = PushTarget(branch, out var problem);

@@ -93,7 +93,7 @@ namespace Upwake.Vetka.Tests
                 var path = GitSettings.GitPath;
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
-                    path = Git.GetSystemGitPath();
+                    path = Upwake.Vetka.GitExecutable.Find();
                 }
 
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))

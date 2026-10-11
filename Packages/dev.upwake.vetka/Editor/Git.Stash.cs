@@ -26,8 +26,7 @@ namespace Upwake.Vetka
                 .ToList());
         }
 
-        private string CurrentReference(GitStash stash) =>
-            Stashes().FirstOrDefault(current => current.Hash == stash.Hash).Reference;
+        private string StashReference(string hash) => Stashes().FirstOrDefault(current => current.Hash == hash).Reference;
 
         private static GitResult StashGone(GitStash stash, string action) =>
             GitResult.Failure($"\"{stash.Message}\" is no longer in the stash list, nothing was {action}");
@@ -77,7 +76,7 @@ namespace Upwake.Vetka
 
         public GitResult ApplyStash(GitStash stash, bool drop)
         {
-            var reference = CurrentReference(stash);
+            var reference = StashReference(stash.Hash);
             if (reference == null)
             {
                 return StashGone(stash, "applied");
@@ -289,7 +288,7 @@ namespace Upwake.Vetka
 
         public GitResult DropStash(GitStash stash)
         {
-            var reference = CurrentReference(stash);
+            var reference = StashReference(stash.Hash);
             if (reference == null)
             {
                 return StashGone(stash, "dropped");
@@ -315,9 +314,7 @@ namespace Upwake.Vetka
             List<string> conflicts, string snapshot, List<string> created, TreeState before)
         {
             var reason = conflicts.Count == 0 ? apply.Message : ConflictList(conflicts);
-            var touched = StashPaths(stash);
             var staged = Run("diff", "--cached", "--name-only", "-z", "--no-renames");
-            var now = ReadTree();
             var label = $"Uncommitted changes before applying \"{message}\" at {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
             if (!string.IsNullOrEmpty(snapshot))
             {
@@ -325,15 +322,9 @@ namespace Upwake.Vetka
             }
 
             var kept = !string.IsNullOrEmpty(snapshot) && Run("stash", "store", "-m", label, snapshot).IsSuccess;
-            var cleanup = touched == null || now == null || !staged.IsSuccess
-                ? GitResult.Failure("The changed files cannot be read")
-                : ResetToHead(now.Changed
-                    .Where(new HashSet<string>(touched
-                        .Concat(RenamedSince(stash, touched))
-                        .Concat(NulSeparated(staged.Output))
-                        .Concat(before.Changed)
-                        .Concat(conflicts)).Contains)
-                    .ToList(), path => !before.Untracked.Contains(path)) ?? GitResult.Success("");
+            var cleanup = (staged.IsSuccess
+                ? UndoStashApply(stash, before, conflicts, NulSeparated(staged.Output).Concat(before.Changed))
+                : GitResult.Failure("The changed files cannot be read")) ?? GitResult.Success("");
             if (!cleanup.IsSuccess)
             {
                 ForgetInterruption();
@@ -343,7 +334,7 @@ namespace Upwake.Vetka
                         ? ""
                         : $"Local changes from before it: git stash apply --index {snapshot}";
                 return GitResult.Failure(
-                    $"{Named(stash, reference)} not applied and the project could not be cleaned up\n{reason}\n" +
+                    $"{StashReference(stash) ?? reference} not applied and the project could not be cleaned up\n{reason}\n" +
                     $"{cleanup.Message}\n{saved}".TrimEnd());
             }
 
@@ -359,8 +350,8 @@ namespace Upwake.Vetka
             var because = conflicts.Count == 0 ? "" : " because of conflicts";
             var text = new StringBuilder();
             text.AppendLine(restore.IsSuccess
-                ? $"{Named(stash, reference)} not applied{because}, the project and the stash are unchanged"
-                : $"{Named(stash, reference)} not applied{because}, the local changes could not be restored");
+                ? $"{StashReference(stash) ?? reference} not applied{because}, the project and the stash are unchanged"
+                : $"{StashReference(stash) ?? reference} not applied{because}, the local changes could not be restored");
             text.AppendLine(reason);
             if (!restore.IsSuccess)
             {
@@ -372,8 +363,5 @@ namespace Upwake.Vetka
 
             return GitResult.Failure(text.ToString().TrimEnd());
         }
-
-        private string Named(string stash, string fallback) =>
-            Stashes().FirstOrDefault(current => current.Hash == stash).Reference ?? fallback;
     }
 }

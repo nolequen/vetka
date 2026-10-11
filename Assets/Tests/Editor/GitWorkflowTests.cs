@@ -1624,7 +1624,7 @@ namespace Upwake.Vetka.Tests
 
             Assert.IsTrue(result.IsSuccess, result.Message);
             Assert.IsFalse(repo.Exists(".git/vetka-interrupted"));
-            Assert.IsNull(repo.Git.InterruptedOperation());
+            Assert.IsNull(repo.Git.Interruption().Found);
         }
 
         [Test]
@@ -1638,7 +1638,7 @@ namespace Upwake.Vetka.Tests
             repo.Write(".git/vetka-interrupted",
                 $"Merge of feature\n{repo.RunGit("rev-parse", "stash@{0}")}\n2026-10-02 18:00\n");
 
-            var interruption = repo.Git.InterruptedOperation();
+            var interruption = repo.Git.Interruption().Found;
 
             Assert.IsTrue(interruption.HasValue);
             Assert.AreEqual("Merge of feature", interruption.Value.Description);
@@ -1649,6 +1649,10 @@ namespace Upwake.Vetka.Tests
             Assert.IsTrue(repo.Exists(".git/vetka-interrupted"));
             Assert.AreEqual(Path.GetFullPath(Path.Combine(repo.Root, ".git", "vetka-interrupted")),
                 interruption.Value.MarkerPath);
+
+            Git.DismissInterruption(interruption.Value);
+
+            Assert.IsFalse(repo.Exists(".git/vetka-interrupted"));
         }
 
         [Test]
@@ -1662,7 +1666,7 @@ namespace Upwake.Vetka.Tests
             repo.RunGit("stash", "push", "-q", "-m", message);
             repo.Write(".git/vetka-interrupted", $"Merge of feature\n\n2026-10-04 10:00\n{message}\n");
 
-            var interruption = repo.Git.InterruptedOperation();
+            var interruption = repo.Git.Interruption().Found;
 
             Assert.IsTrue(interruption.HasValue);
             Assert.AreEqual("stash@{0}", interruption.Value.Stash);
@@ -1739,7 +1743,10 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("base");
             repo.Write(".git/vetka-interrupted", $"Merge of feature\n{repo.Head}\n2026-10-02 18:00\n");
 
-            Assert.IsNull(repo.Git.InterruptedOperation());
+            var state = repo.Git.Interruption();
+
+            Assert.IsNull(state.Found);
+            Assert.IsFalse(state.Pending);
             Assert.IsFalse(repo.Exists(".git/vetka-interrupted"));
         }
 
@@ -1752,13 +1759,16 @@ namespace Upwake.Vetka.Tests
             repo.Write(".git/vetka-interrupted",
                 "Merge of feature\n\n2026-10-04 10:00\nUncommitted changes before Merge of feature at 2026-10-04 10:00:00\n");
 
-            Assert.IsNull(repo.Git.InterruptedOperation());
-            Assert.IsTrue(repo.Git.InterruptionPending());
+            var fresh = repo.Git.Interruption();
+
+            Assert.IsNull(fresh.Found);
+            Assert.IsTrue(fresh.Pending);
 
             File.SetLastWriteTimeUtc(Path.Combine(repo.Root, ".git", "vetka-interrupted"), DateTime.UtcNow.AddHours(-1));
+            var old = repo.Git.Interruption();
 
-            Assert.IsNull(repo.Git.InterruptedOperation());
-            Assert.IsFalse(repo.Git.InterruptionPending());
+            Assert.IsNull(old.Found);
+            Assert.IsFalse(old.Pending);
         }
 
         private static TestRepository CreateRepositoryWithSilentRemote()
