@@ -6,12 +6,12 @@ namespace Upwake.Vetka
         {
             name = name?.Trim() ?? "";
             if (name.Length == 0 || name.StartsWith("-") || name == "HEAD" ||
-                !Run("check-ref-format", "refs/tags/" + name).IsSuccess)
+                !Run("check-ref-format", TagRefs + name).IsSuccess)
             {
                 return GitResult.Failure($"'{name}' is not a valid tag name");
             }
 
-            if (Run("rev-parse", "-q", "--verify", "refs/tags/" + name).IsSuccess)
+            if (Run("rev-parse", "-q", "--verify", TagRefs + name).IsSuccess)
             {
                 return GitResult.Failure($"Tag {name} already exists");
             }
@@ -19,7 +19,7 @@ namespace Upwake.Vetka
             var done = $"Tag {name} created on {commit}";
             if (string.IsNullOrWhiteSpace(message))
             {
-                var created = Run("update-ref", "refs/tags/" + name, commit + "^{commit}", "");
+                var created = Run("update-ref", TagRefs + name, commit + "^{commit}", "");
                 return created.IsSuccess ? GitResult.Success(done) : created;
             }
 
@@ -36,31 +36,26 @@ namespace Upwake.Vetka
             }
         }
 
-        public GitResult DeleteTag(string name, bool onRemote)
+        public GitResult DeleteTag(string name, string remote)
         {
-            string remote = null;
             var note = "";
-            if (onRemote)
+            var removedOnRemote = false;
+            if (remote != null)
             {
-                remote = TagRemote(out var problem);
-                if (remote == null)
-                {
-                    return GitResult.Failure($"Tag {name} not deleted: {problem}");
-                }
-
-                var deleted = Run("push", "--no-follow-tags", "--delete", remote, "refs/tags/" + name);
+                var deleted = Run("push", "--no-follow-tags", "--delete", remote, TagRefs + name);
                 if (!deleted.IsSuccess)
                 {
                     return GitResult.Failure($"Tag {name} not deleted: deleting it on {remote} failed\n{deleted.Message}");
                 }
 
-                note = deleted.Error.Contains("non-existent ref") ? $", it was not on {remote}" : $" here and on {remote}";
+                removedOnRemote = !deleted.Error.Contains("non-existent ref");
+                note = removedOnRemote ? $" here and on {remote}" : $", it was not on {remote}";
             }
 
-            var local = Run("update-ref", "-d", "refs/tags/" + name);
+            var local = Run("update-ref", "-d", TagRefs + name);
             if (!local.IsSuccess)
             {
-                return remote != null && !note.StartsWith(",")
+                return removedOnRemote
                     ? GitResult.Done($"Tag {name} deleted on {remote}, but not here\n{local.Message}")
                     : local;
             }

@@ -11,40 +11,23 @@ namespace Upwake.Vetka
         private string _commit;
         private string _name = "";
         private string _message = "";
-        private Action<string, string> _onCreate;
+        private (string Name, string Message)? _answer;
         [NonSerialized] private bool _focused;
-        [NonSerialized] private bool _closing;
         [NonSerialized] private GUIStyle _messageStyle;
 
-        public static void Show(string commit, Action<string, string> callback)
+        public static (string Name, string Message)? Ask(string commit)
         {
             var window = CreateInstance<NewTagWindow>();
-            window.titleContent = new GUIContent("New Tag");
             window._commit = commit;
-            window._onCreate = callback;
-
-            var size = new Vector2(420, 200);
-            var main = EditorGUIUtility.GetMainWindowPosition();
-            window.position = new Rect(main.center - size / 2, size);
-            window.minSize = size;
-
-            window.ShowUtility();
-            window.Focus();
+            return ModalDialog.Show(window, "New Tag", new Vector2(420, 200), fixedSize: false) ? window._answer : null;
         }
 
         private void OnGUI()
         {
-            if (_onCreate == null)
-            {
-                CloseLater();
-                return;
-            }
-
             _messageStyle ??= new GUIStyle(EditorStyles.textArea) { wordWrap = true };
             var current = Event.current;
-            var submit = current.type == EventType.KeyDown && GUI.GetNameOfFocusedControl() == NameField &&
-                         (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter);
-            var cancel = current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape;
+            var submit = GUI.GetNameOfFocusedControl() == NameField && ModalDialog.Submitted(current);
+            var cancel = ModalDialog.Cancelled(current);
 
             EditorGUILayout.LabelField($"On {_commit}", EditorStyles.wordWrappedLabel);
 
@@ -67,39 +50,17 @@ namespace Upwake.Vetka
             {
                 if (GUILayout.Button("Create", GUILayout.Width(80)) || submit && valid)
                 {
-                    var callback = _onCreate;
-                    var name = _name.Trim();
-                    var message = _message;
-                    _onCreate = null;
-                    EditorApplication.delayCall += () => callback(name, message);
-                    CloseLater();
+                    _answer = (_name.Trim(), _message);
+                    ModalDialog.Close(this);
                 }
             }
 
             if (GUILayout.Button("Cancel", GUILayout.Width(80)) || cancel)
             {
-                _onCreate = null;
-                CloseLater();
+                ModalDialog.Close(this);
             }
 
             EditorGUILayout.EndHorizontal();
-        }
-
-        private void CloseLater()
-        {
-            if (_closing)
-            {
-                return;
-            }
-
-            _closing = true;
-            EditorApplication.delayCall += () =>
-            {
-                if (this != null)
-                {
-                    Close();
-                }
-            };
         }
     }
 }

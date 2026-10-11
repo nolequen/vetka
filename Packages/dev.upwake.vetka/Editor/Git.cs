@@ -24,7 +24,7 @@ namespace Upwake.Vetka
         }
 
         public Git(string gitPath)
-            : this(gitPath, Directory.GetParent(Application.dataPath)?.FullName ?? Directory.GetCurrentDirectory())
+            : this(gitPath, ProjectRoot ?? Directory.GetCurrentDirectory())
         {
         }
 
@@ -34,6 +34,8 @@ namespace Upwake.Vetka
             _projectRoot = workingDirectory;
             _environment = environment;
         }
+
+        internal static string ProjectRoot => Directory.GetParent(Application.dataPath)?.FullName;
 
         private string GitPath => _gitPath ?? GitSettings.GitPath;
 
@@ -138,12 +140,34 @@ namespace Upwake.Vetka
             }
 
             var top = Run("rev-parse", "--show-toplevel");
-            if (top.IsSuccess)
+            if (!top.IsSuccess)
             {
-                _top = top.Output;
+                return top;
             }
 
-            return top;
+            _top = Path.GetFullPath(top.Output);
+            return GitResult.Success(_top);
+        }
+
+        private string GitDirPath(string name)
+        {
+            var path = Run("rev-parse", "--git-path", name);
+            return path.IsSuccess ? Path.GetFullPath(Path.Combine(_projectRoot, path.Output)) : null;
+        }
+
+        private List<string> ChangedPaths(params string[] arguments) => ChangedPaths(null, arguments);
+
+        private List<string> ChangedPaths(IReadOnlyDictionary<string, string> environment, params string[] arguments)
+        {
+            var diff = RunWithEnvironment(environment,
+                new[] { "diff", "--name-only", "-z", "--no-renames" }.Concat(arguments).ToArray());
+            return diff.IsSuccess ? NulSeparated(diff.Output) : null;
+        }
+
+        private int? CountCommits(params string[] range)
+        {
+            var count = Run(new[] { "rev-list", "--count" }.Concat(range).ToArray());
+            return count.IsSuccess && int.TryParse(count.Output, out var parsed) ? parsed : (int?)null;
         }
 
         private GitResult RunWithPathspecs(Dictionary<string, string> environment, IEnumerable<string> paths,
@@ -168,14 +192,8 @@ namespace Upwake.Vetka
 
         private T WithTemporaryIndex<T>(Func<Dictionary<string, string>, T> run)
         {
-            var indexPath = Run("rev-parse", "--git-path", "index");
-            if (!indexPath.IsSuccess)
-            {
-                return default;
-            }
-
-            var source = Path.GetFullPath(Path.Combine(_projectRoot, indexPath.Output));
-            if (!File.Exists(source))
+            var source = GitDirPath("index");
+            if (source == null || !File.Exists(source))
             {
                 return default;
             }
@@ -203,17 +221,51 @@ namespace Upwake.Vetka
 
         private static string Subject(string message)
         {
-            var subject = message.Trim().Split('\r', '\n')[0].Trim();
-            return subject.Length > 60 ? subject.Substring(0, 57) + "..." : subject;
+            return Texts.Shortened(message.Trim().Split('\r', '\n')[0].Trim(), 60);
         }
-
-        private static string Counted(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
 
         private static string LiteralPathspecs(IEnumerable<string> paths) =>
             string.Join("\n", paths.Select(path => ":(top,literal)" + path));
 
         private static List<string> NulSeparated(string output) =>
             output.Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+
+        private static IEnumerable<(string Status, string Path, string OldPath)> NameStatus(
+            IReadOnlyList<string> tokens, int start = 0)
+        {
+            for (var i = start; i < tokens.Count;)
+            {
+                var status = tokens[i].Trim('\n', '\r');
+                if (status.Length == 0)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (i + 1 >= tokens.Count)
+                {
+                    yield break;
+                }
+
+                if ((status[0] == 'R' || status[0] == 'C') && i + 2 < tokens.Count)
+                {
+                    yield return (status, tokens[i + 2], tokens[i + 1]);
+                    i += 3;
+                    continue;
+                }
+
+                yield return (status, tokens[i + 1], null);
+                i += 2;
+            }
+        }
+
+        private static List<GitFileChange> FileChanges(string output) =>
+            Sorted(NameStatus(output.Split('\0'))
+                .Select(entry => new GitFileChange(ParseStatus(entry.Status.Substring(0, 1)), entry.Path, entry.OldPath))
+                .ToList());
+
+        private static List<string> Lines(string output) =>
+            output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList();
 
         private static string WriteTempFile(string content)
         {
@@ -246,11 +298,6 @@ namespace Upwake.Vetka
                 return GitStatus.Untracked;
             }
 
-            if (index == '!' && workTree == '!')
-            {
-                return GitStatus.Ignored;
-            }
-
             if (index == 'U' || workTree == 'U' || (index == 'A' && workTree == 'A') ||
                 (index == 'D' && workTree == 'D'))
             {
@@ -265,7 +312,7 @@ namespace Upwake.Vetka
             return ParseStatus(index != ' ' ? index.ToString() : workTree.ToString());
         }
 
-        internal static GitStatus ParseStatus(string value)
+        private static GitStatus ParseStatus(string value)
         {
             return value switch
             {
@@ -276,10 +323,6 @@ namespace Upwake.Vetka
                 "C" => GitStatus.Copied,
                 "T" => GitStatus.TypeChanged,
                 "U" => GitStatus.Unmerged,
-                "?" => GitStatus.Untracked,
-                "!" => GitStatus.Ignored,
-                "X" => GitStatus.Unknown,
-                "B" => GitStatus.Broken,
                 _ => GitStatus.Unknown
             };
         }

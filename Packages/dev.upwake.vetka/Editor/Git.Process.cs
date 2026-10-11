@@ -40,25 +40,20 @@ namespace Upwake.Vetka
 
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
 
-        private GitResult Run(params string[] arguments) => Execute(null, false, arguments);
-
-        private GitResult RunWithProgress(params string[] arguments) => Execute(null, true, arguments);
-
-        private GitResult RunWithProgress(IReadOnlyDictionary<string, string> environment, params string[] arguments) =>
-            Execute(environment, true, arguments);
+        private GitResult Run(params string[] arguments) => Execute(null, arguments);
 
         private GitResult RunWithEnvironment(IReadOnlyDictionary<string, string> environment,
-            params string[] arguments) => Execute(environment, false, arguments);
+            params string[] arguments) => Execute(environment, arguments);
 
-        private GitResult Execute(IReadOnlyDictionary<string, string> environment, bool reportProgress,
-            string[] arguments)
+        private GitResult Execute(IReadOnlyDictionary<string, string> environment, string[] arguments)
         {
-            var retry = Kind(arguments) == CommandKind.Changing && MayRepeat(arguments);
+            var kind = Kind(arguments);
+            var retry = kind == CommandKind.Changing && MayRepeat(arguments);
             var waited = Stopwatch.StartNew();
             var delay = TimeSpan.FromMilliseconds(100);
             while (true)
             {
-                var result = ExecuteOnce(environment, reportProgress, arguments);
+                var result = ExecuteOnce(environment, kind, arguments);
                 if (!retry || result.IsSuccess || result.IsCancelled ||
                     result.Error.IndexOf("index.lock", StringComparison.Ordinal) < 0 ||
                     waited.Elapsed + delay > LockRetryTimeout)
@@ -71,7 +66,7 @@ namespace Upwake.Vetka
             }
         }
 
-        private GitResult ExecuteOnce(IReadOnlyDictionary<string, string> environment, bool reportProgress,
+        private GitResult ExecuteOnce(IReadOnlyDictionary<string, string> environment, CommandKind kind,
             string[] arguments)
         {
             var gitPath = GitPath;
@@ -87,7 +82,6 @@ namespace Upwake.Vetka
                 return GitResult.Cancelled($"'{command}' cancelled");
             }
 
-            var kind = Kind(arguments);
             var startInfo = new ProcessStartInfo
             {
                 FileName = gitPath,
@@ -128,6 +122,10 @@ namespace Upwake.Vetka
             {
                 startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
             }
+            else if (kind == CommandKind.Network)
+            {
+                startInfo.Environment["GIT_LFS_FORCE_PROGRESS"] = "1";
+            }
 
             SetVariables(startInfo, environment);
             BeforeCommand?.Invoke(arguments);
@@ -139,7 +137,7 @@ namespace Upwake.Vetka
                 using var job = ProcessJob.Attach(process);
 
                 var activity = new Activity();
-                var reporter = reportProgress ? context?.Reporter ?? IgnoreProgress : null;
+                var reporter = kind == CommandKind.Network ? context?.Reporter ?? IgnoreProgress : null;
                 var outputTask = Task.Run(() => Read(new ActivityReader(process.StandardOutput, activity), reporter));
                 var errorTask = Task.Run(() => Read(new ActivityReader(process.StandardError, activity), reporter));
 

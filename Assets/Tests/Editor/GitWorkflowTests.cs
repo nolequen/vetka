@@ -43,7 +43,7 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("a.txt", "a\n");
             repo.CommitAll("seen in the log");
-            var seen = repo.RunGit("rev-parse", "--short", "HEAD");
+            var seen = repo.Short("HEAD");
             repo.Write("a.txt", "a2\n");
             repo.CommitAll("made later");
             var before = repo.Snapshot();
@@ -94,111 +94,6 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual("1", repo.RunGit("rev-list", "--count", "HEAD"));
             Assert.AreEqual("a", repo.RunGit("show", "HEAD:a.txt"));
             Assert.AreEqual("M  a.txt", repo.RunGit("status", "--porcelain"));
-        }
-
-        [Test]
-        public void Push_NewBranch_SetsUpstreamAndMarksCommitsAsPushed()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("switch", "-q", "-c", "feature");
-            local.Write("feature.txt", "feature\n");
-            local.CommitAll("feature commit");
-            var git = local.Git;
-
-            Assert.IsFalse(git.IsHeadPushed());
-            Assert.AreEqual(1, git.OutgoingCommits().Count);
-
-            var result = git.Push();
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Pushed 1 commit to new branch origin/feature", result.Message);
-            Assert.AreEqual("origin/feature", git.UpstreamBranch());
-            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feature"));
-            Assert.IsTrue(git.IsHeadPushed());
-            Assert.AreEqual(0, git.OutgoingCommits().Count);
-            Assert.IsTrue(git.Log().All(commit => commit.IsPushed));
-
-            local.Write("feature.txt", "unpushed\n");
-            local.CommitAll("unpushed commit");
-            var log = git.Log();
-
-            Assert.IsFalse(log[0].IsPushed);
-            Assert.IsTrue(log.Skip(1).All(commit => commit.IsPushed));
-            Assert.IsFalse(git.IsHeadPushed());
-
-            local.Write("feature.txt", "second unpushed\n");
-            local.CommitAll("second unpushed commit");
-
-            Assert.AreEqual("Pushed 2 commits to origin/feature", git.Push().Message);
-            Assert.AreEqual("Everything is up to date", git.Push().Message);
-        }
-
-        [Test]
-        public void ReadLogPage_PagesFromTheHeadItStartedAt()
-        {
-            using var repo = TestRepository.Create();
-            for (var i = 1; i <= 5; i++)
-            {
-                repo.Write("a.txt", $"{i}\n");
-                repo.CommitAll($"commit {i}");
-            }
-
-            var git = repo.Git;
-            var first = git.ReadLogPage(null, 0, 2);
-            repo.Write("a.txt", "later\n");
-            repo.CommitAll("made later");
-            var second = git.ReadLogPage(first.Head, 2, 2);
-            var third = git.ReadLogPage(first.Head, 4, 2);
-
-            Assert.IsTrue(first.Result.IsSuccess, first.Result.Message);
-            Assert.AreEqual(repo.RunGit("rev-parse", "HEAD~1"), first.Head);
-            CollectionAssert.AreEqual(new[] { "commit 5", "commit 4" }, first.Commits.Select(commit => commit.Subject));
-            CollectionAssert.AreEqual(new[] { "commit 3", "commit 2" }, second.Commits.Select(commit => commit.Subject));
-            CollectionAssert.AreEqual(new[] { "commit 1" }, third.Commits.Select(commit => commit.Subject));
-        }
-
-        [Test]
-        public void ReadLogPage_MarksUnpushedCommitsOnEveryPage()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            for (var i = 1; i <= 3; i++)
-            {
-                local.Write("f.txt", $"{i}\n");
-                local.CommitAll($"local {i}");
-            }
-
-            var git = local.Git;
-            var first = git.ReadLogPage(null, 0, 2);
-            var second = git.ReadLogPage(first.Head, 2, 2);
-
-            CollectionAssert.AreEqual(new[] { false, false }, first.Commits.Select(commit => commit.IsPushed));
-            CollectionAssert.AreEqual(new[] { "local 1", "base" }, second.Commits.Select(commit => commit.Subject));
-            CollectionAssert.AreEqual(new[] { false, true }, second.Commits.Select(commit => commit.IsPushed));
-        }
-
-        [Test]
-        public void ReadLogPage_OfAnotherBranch_MarksCommitsByThatBranchsRemote()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            var git = local.Git;
-            local.RunGit("switch", "-q", "-c", "feature");
-            local.Write("feature.txt", "pushed\n");
-            local.CommitAll("pushed feature");
-            Assert.IsTrue(git.Push().IsSuccess);
-            local.Write("feature.txt", "local\n");
-            local.CommitAll("local feature");
-            var tip = local.Head;
-            local.RunGit("switch", "-q", "main");
-
-            var branch = git.ReadLogPage(tip, 0, 2, "refs/heads/feature");
-            var tracking = git.ReadLogPage(git.CommitOf("refs/remotes/origin/feature"), 0, 1,
-                "refs/remotes/origin/feature");
-
-            CollectionAssert.AreEqual(new[] { false, true }, branch.Commits.Select(commit => commit.IsPushed));
-            CollectionAssert.AreEqual(new[] { true }, tracking.Commits.Select(commit => commit.IsPushed));
         }
 
         [Test]
@@ -327,24 +222,20 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/x.prefab", "a\n");
             repo.Write("Assets/x.prefab.meta", "guid: 1\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             repo.RunGit("switch", "-q", "-c", "feature");
             Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Sub"));
             repo.RunGit("mv", "Assets/x.prefab", "Assets/Sub/x.prefab");
             repo.RunGit("mv", "Assets/x.prefab.meta", "Assets/Sub/x.prefab.meta");
-            CommitAt(repo, 2, "commit", "-q", "-m", "move");
+            repo.CommitAllAt(2, "move");
             repo.Write("Assets/Sub/x.prefab", "a\nfeature\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "edit on feature");
+            repo.CommitAllAt(3, "edit on feature");
             repo.RunGit("switch", "-q", "main");
             repo.Write("other.txt", "o\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 4, "commit", "-q", "-m", "unrelated on main");
-            CommitAt(repo, 5, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+            repo.CommitAllAt(4, "unrelated on main");
+            repo.RunGitAt(5, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
             repo.Write("Assets/Sub/x.prefab", "a\nfeature\nmain\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 6, "commit", "-q", "-m", "edit on main");
+            repo.CommitAllAt(6, "edit on main");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "Assets/Sub/x.prefab", withMeta);
@@ -385,25 +276,21 @@ namespace Upwake.Vetka.Tests
             const string prefab = "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Unit\n  m_Layer: 0\n" +
                                   "  m_TagString: Untagged\n  m_IsActive: 1\n";
             repo.Write("readme.txt", "r\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "root");
+            repo.CommitAllAt(1, "root");
             repo.RunGit("branch", "feature");
             repo.Write("Assets/asset.prefab", prefab);
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "create asset");
+            repo.CommitAllAt(2, "create asset");
             repo.RunGit("switch", "-q", "-c", "s1");
             repo.Write("Assets/asset.prefab", prefab + "  edited: 1\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "edit on s1");
+            repo.CommitAllAt(3, "edit on s1");
             repo.RunGit("switch", "-q", "main");
-            CommitAt(repo, 4, "merge", "-q", "--no-ff", "-m", "merge s1", "s1");
+            repo.RunGitAt(4, "merge", "-q", "--no-ff", "-m", "merge s1", "s1");
             repo.RunGit("switch", "-q", "feature");
             repo.Write("Assets/sim.prefab", prefab.Replace("Unit", "Other"));
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 5, "commit", "-q", "-m", "create sim");
-            CommitAt(repo, 6, "merge", "-q", "--no-ff", "-m", "back merge", "main");
+            repo.CommitAllAt(5, "create sim");
+            repo.RunGitAt(6, "merge", "-q", "--no-ff", "-m", "back merge", "main");
             repo.RunGit("switch", "-q", "main");
-            CommitAt(repo, 7, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+            repo.RunGitAt(7, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "Assets/asset.prefab", withMeta: true);
@@ -418,22 +305,19 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = TestRepository.Create();
             repo.Write("f.txt", "1\n2\n3\n4\n5\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create f");
+            repo.CommitAllAt(1, "create f");
             repo.RunGit("switch", "-q", "-c", "feature");
             repo.RunGit("mv", "f.txt", "g.txt");
-            CommitAt(repo, 2, "commit", "-q", "-m", "rename to g");
+            repo.CommitAllAt(2, "rename to g");
             repo.RunGit("switch", "-q", "main");
             repo.Write("f.txt", "1\n2\n3\n4\n5\nmain\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "edit f on main");
+            repo.CommitAllAt(3, "edit f on main");
             repo.RunGit("switch", "-q", "feature");
-            CommitAt(repo, 4, "merge", "-q", "--no-ff", "-m", "sync main", "main");
+            repo.RunGitAt(4, "merge", "-q", "--no-ff", "-m", "sync main", "main");
             repo.Write("g.txt", "0\n1\n2\n3\n4\n5\nmain\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 5, "commit", "-q", "-m", "edit g");
+            repo.CommitAllAt(5, "edit g");
             repo.RunGit("switch", "-q", "main");
-            CommitAt(repo, 6, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+            repo.RunGitAt(6, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "g.txt", withMeta: false);
@@ -516,18 +400,15 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = TestRepository.Create();
             repo.Write("x.txt", "1\n2\n3\n4\n5\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create x");
+            repo.CommitAllAt(1, "create x");
             repo.RunGit("mv", "x.txt", "y.txt");
-            CommitAt(repo, 2, "commit", "-q", "-m", "x to y");
+            repo.CommitAllAt(2, "x to y");
             repo.Write("y.txt", "1\n2\n3\n4\n5\n6\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "edit y");
+            repo.CommitAllAt(3, "edit y");
             repo.RunGit("mv", "y.txt", "x.txt");
-            CommitAt(repo, 4, "commit", "-q", "-m", "y to x");
+            repo.CommitAllAt(4, "y to x");
             repo.Write("x.txt", "1\n2\n3\n4\n5\n6\n7\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 5, "commit", "-q", "-m", "edit x");
+            repo.CommitAllAt(5, "edit x");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "x.txt", withMeta: false);
@@ -542,17 +423,14 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/Player.cs", "class Player\n{\n    int health;\n}\n");
             repo.Write("Assets/Player.cs.meta", "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             repo.Write("Assets/Player.cs", "class Player\n{\n    int health;\n    int mana;\n}\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "edit");
+            repo.CommitAllAt(2, "edit");
             Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Scripts"));
             repo.RunGit("mv", "Assets/Player.cs", "Assets/Scripts/Player.cs");
             repo.Delete("Assets/Player.cs.meta");
             repo.Write("Assets/Scripts/Player.cs.meta", "fileFormatVersion: 2\nguid: 55555555555555555555555555555555\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "move");
+            repo.CommitAllAt(3, "move");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "Assets/Scripts/Player.cs", withMeta: true);
@@ -566,22 +444,18 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             const string settings = "%YAML 1.1\n--- !u!1 &1\nSettings:\n  a: 1\n  b: 2\n  c: 3\n  d: 4\n  e: 5\n";
             repo.Write("ProjectSettings/OldSettings.asset", settings);
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create old");
+            repo.CommitAllAt(1, "create old");
             repo.Write("ProjectSettings/OldSettings.asset", settings + "  g: 7\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "tweak old");
+            repo.CommitAllAt(2, "tweak old");
             repo.RunGit("switch", "-q", "-c", "side");
             repo.RunGit("rm", "-q", "ProjectSettings/OldSettings.asset");
-            CommitAt(repo, 3, "commit", "-q", "-m", "delete old");
+            repo.CommitAllAt(3, "delete old");
             repo.Write("ProjectSettings/NewSettings.asset", settings + "  g: 7\n  f: 6\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 4, "commit", "-q", "-m", "create new");
+            repo.CommitAllAt(4, "create new");
             repo.RunGit("switch", "-q", "main");
             repo.Write("readme.txt", "r\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 5, "commit", "-q", "-m", "unrelated on main");
-            CommitAt(repo, 6, "merge", "-q", "--no-ff", "-m", "merge side", "side");
+            repo.CommitAllAt(5, "unrelated on main");
+            repo.RunGitAt(6, "merge", "-q", "--no-ff", "-m", "merge side", "side");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "ProjectSettings/NewSettings.asset", withMeta: false);
@@ -595,16 +469,13 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.RunGit("config", "log.showRoot", "false");
             repo.Write("a.txt", "1\n2\n3\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create a");
+            repo.CommitAllAt(1, "create a");
             repo.Write("other.txt", "o\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "unrelated");
+            repo.CommitAllAt(2, "unrelated");
             repo.RunGit("mv", "a.txt", "b.txt");
-            CommitAt(repo, 3, "commit", "-q", "-m", "a to b");
+            repo.CommitAllAt(3, "a to b");
             repo.Write("b.txt", "1\n2\n3\n4\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 4, "commit", "-q", "-m", "edit b");
+            repo.CommitAllAt(4, "edit b");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "b.txt", withMeta: false);
@@ -618,16 +489,13 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = TestRepository.Create();
             repo.Write("build.sh", "a\nb\nc\nd\ne\nf\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             repo.Write("build.sh", "a\nb\nc\nd\ne\nf\ng\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "edit");
+            repo.CommitAllAt(2, "edit");
             repo.Write("build-ios.sh", "a\nb\nc\nd\ne\nf\ng\n");
             repo.RunGit("mv", "build.sh", "build-android.sh");
             repo.Write("build-android.sh", "a\nb\nc\nd\ne\nf\nandroid\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "split");
+            repo.CommitAllAt(3, "split");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "build-android.sh", withMeta: false);
@@ -643,21 +511,18 @@ namespace Upwake.Vetka.Tests
             repo.Write("Assets/UI/Icons/close.png.meta", "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\n");
             repo.Write("Assets/Art/close.png", "the same icon bytes\n");
             repo.Write("Assets/Art/close.png.meta", "fileFormatVersion: 2\nguid: 22222222bbbbbbbbbbbbbbbbbbbbbbbb\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "add both");
+            repo.CommitAllAt(1, "add both");
             repo.Write("Assets/UI/Icons/close.png.meta",
                 "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\nTextureImporter:\n  readable: 1\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "tweak ui icon");
+            repo.CommitAllAt(2, "tweak ui icon");
             repo.Write("Assets/Art/close.png.meta",
                 "fileFormatVersion: 2\nguid: 22222222bbbbbbbbbbbbbbbbbbbbbbbb\nTextureImporter:\n  sprite: 1\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "tweak art icon");
+            repo.CommitAllAt(3, "tweak art icon");
             Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Common"));
             repo.RunGit("mv", "Assets/UI/Icons/close.png", "Assets/Common/close.png");
             repo.RunGit("mv", "Assets/UI/Icons/close.png.meta", "Assets/Common/close.png.meta");
             repo.RunGit("rm", "-q", "Assets/Art/close.png", "Assets/Art/close.png.meta");
-            CommitAt(repo, 4, "commit", "-q", "-m", "dedupe");
+            repo.CommitAllAt(4, "dedupe");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "Assets/Common/close.png", withMeta: true);
@@ -673,23 +538,19 @@ namespace Upwake.Vetka.Tests
             repo.Write("Assets/Art/close.png", "the same icon bytes\n");
             repo.Write("Assets/UI/Icons/close.png", "the same icon bytes\n");
             repo.Write("Assets/UI/Icons/close.png.meta", "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "add both");
+            repo.CommitAllAt(1, "add both");
             repo.Write("Assets/UI/Icons/close.png.meta",
                 "fileFormatVersion: 2\nguid: 11111111aaaaaaaaaaaaaaaaaaaaaaaa\nTextureImporter:\n  readable: 1\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "tweak ui icon");
+            repo.CommitAllAt(2, "tweak ui icon");
             repo.Write("Assets/Art/close.png", "the same icon bytes\n\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "touch art icon");
+            repo.CommitAllAt(3, "touch art icon");
             repo.Write("Assets/Art/close.png", "the same icon bytes\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 4, "commit", "-q", "-m", "restore art icon");
+            repo.CommitAllAt(4, "restore art icon");
             Directory.CreateDirectory(Path.Combine(repo.Root, "Assets", "Common"));
             repo.RunGit("mv", "Assets/UI/Icons/close.png", "Assets/Common/close.png");
             repo.RunGit("mv", "Assets/UI/Icons/close.png.meta", "Assets/Common/close.png.meta");
             repo.RunGit("rm", "-q", "Assets/Art/close.png");
-            CommitAt(repo, 5, "commit", "-q", "-m", "dedupe");
+            repo.CommitAllAt(5, "dedupe");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "Assets/Common/close.png", withMeta: true);
@@ -707,15 +568,12 @@ namespace Upwake.Vetka.Tests
                 repo.Write($"Old/file{i}.txt", $"file {i}\nline a{i}\nline b{i}\nline c{i}\nline d{i}\n");
             }
 
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             repo.Write("Old/file3.txt", "file 3\nline a3\nline b3\nline c3\nline d3\nline e3\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "edit file3");
+            repo.CommitAllAt(2, "edit file3");
             repo.RunGit("rm", "-q", "-r", "Old");
             repo.Write("New/moved.txt", "file 3\nline a3\nline b3\nline c3\nline d3\nline e3\nline f3\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "move and edit");
+            repo.CommitAllAt(3, "move and edit");
             var git = repo.Git;
             git.PathCharactersPerRead = 1;
 
@@ -736,12 +594,10 @@ namespace Upwake.Vetka.Tests
                     $"fileFormatVersion: 2\nguid: {new string((char)('0' + i), 32)}\n");
             }
 
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             repo.RunGit("mv", "Assets/Old", "Assets/New");
             repo.Write("Assets/New/Unit2.cs", "class Unit2\n{\n    int a2;\n    int b2;\n    int c2;\n    int d2;\n}\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "move and edit");
+            repo.CommitAllAt(2, "move and edit");
             var git = repo.Git;
             var renameReads = 0;
             git.BeforeCommand = arguments =>
@@ -765,11 +621,9 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = TestRepository.Create();
             repo.Write("a.txt", "1\n2\n3\n4\n5\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create a");
+            repo.CommitAllAt(1, "create a");
             repo.Write("b.txt", "1\n2\n3\n4\n5\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "copy to b");
+            repo.CommitAllAt(2, "copy to b");
             var git = repo.Git;
 
             var history = git.FileHistory(repo.Head, "b.txt", withMeta: false);
@@ -783,7 +637,7 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/a.txt", "one\ntwo\nthree\n");
             repo.CommitAll("create");
-            var created = repo.RunGit("rev-parse", "--short", "HEAD");
+            var created = repo.Short("HEAD");
             repo.RunGit("mv", "Assets/a.txt", "Assets/b.txt");
             repo.RunGit("commit", "-q", "-m", "rename");
             repo.Write("Assets/b.txt", "one\ntwo\nthree\nfour\n");
@@ -802,7 +656,7 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/a.txt", "old\n");
             repo.CommitAll("old");
-            var old = repo.RunGit("rev-parse", "--short", "HEAD");
+            var old = repo.Short("HEAD");
             repo.Write("Assets/a.txt", "new\n");
             repo.CommitAll("new");
 
@@ -822,7 +676,7 @@ namespace Upwake.Vetka.Tests
             var bytes = new byte[] { 0x89, 0x50, 0x00, 0x0d, 0x0a, 0xff, 0x0a, 0x00 };
             repo.WriteBytes("Assets/old.png", bytes);
             repo.CommitAll("old image");
-            var old = repo.RunGit("rev-parse", "--short", "HEAD");
+            var old = repo.Short("HEAD");
             repo.RunGit("mv", "Assets/old.png", "Assets/new.png");
             repo.RunGit("commit", "-q", "-m", "rename");
             repo.WriteBytes("Assets/new.png", new byte[] { 1, 2, 3 });
@@ -841,7 +695,7 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/a.txt", "one\ntwo\nthree\n");
             repo.CommitAll("create");
-            var created = repo.RunGit("rev-parse", "--short", "HEAD");
+            var created = repo.Short("HEAD");
             repo.RunGit("mv", "Assets/a.txt", "Assets/b.txt");
             repo.RunGit("commit", "-q", "-m", "rename");
             repo.Write("Assets/a.txt", "unrelated\n");
@@ -862,7 +716,7 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/Data", "old data\n");
             repo.CommitAll("data file");
-            var old = repo.RunGit("rev-parse", "--short", "HEAD");
+            var old = repo.Short("HEAD");
             repo.RunGit("rm", "-q", "Assets/Data");
             repo.RunGit("commit", "-q", "-m", "remove data");
             repo.Write("Assets/Data/mine.txt", "not tracked\n");
@@ -879,11 +733,10 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = TestRepository.Create();
             repo.Write("Assets/a.txt", "one\ntwo\nthree\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             var created = repo.Head;
             repo.RunGit("mv", "Assets/a.txt", "Assets/b.txt");
-            CommitAt(repo, 2, "commit", "-q", "-m", "rename");
+            repo.CommitAllAt(2, "rename");
             var renamed = repo.Head;
 
             var history = repo.Git.FileHistory(repo.Head, "Assets/b.txt", withMeta: false);
@@ -898,13 +751,12 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/a.txt", "one\ntwo\nthree\n");
             repo.Write("Assets/b.txt", "an unrelated file\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create both");
+            repo.CommitAllAt(1, "create both");
             var created = repo.Head;
             repo.RunGit("rm", "-q", "Assets/b.txt");
-            CommitAt(repo, 2, "commit", "-q", "-m", "remove b");
+            repo.CommitAllAt(2, "remove b");
             repo.RunGit("mv", "Assets/a.txt", "Assets/b.txt");
-            CommitAt(repo, 3, "commit", "-q", "-m", "rename a to b");
+            repo.CommitAllAt(3, "rename a to b");
 
             var history = repo.Git.FileHistory(repo.Head, "Assets/b.txt", withMeta: false);
 
@@ -957,20 +809,16 @@ namespace Upwake.Vetka.Tests
             using var repo = TestRepository.Create();
             repo.Write("Assets/Art/a.png", "a\n");
             repo.Write("Assets/Art.meta", "guid: 1\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             repo.Write("Assets/Other/o.txt", "o\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "elsewhere");
+            repo.CommitAllAt(2, "elsewhere");
             repo.Write("Assets/Art/Sub/b.png", "b\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "nested");
+            repo.CommitAllAt(3, "nested");
             repo.Write("Assets/Art.meta", "guid: 1\nlabels: 1\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 4, "commit", "-q", "-m", "folder meta");
+            repo.CommitAllAt(4, "folder meta");
             var git = repo.Git;
 
-            var history = git.FolderHistory(repo.Head, "Assets/Art", withMeta);
+            var history = git.FileHistory(repo.Head, "Assets/Art", withMeta, followRenames: false);
 
             Assert.IsTrue(history.Result.IsSuccess, history.Result.Message);
             CollectionAssert.AreEqual(
@@ -983,20 +831,17 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = TestRepository.Create();
             repo.Write("Assets/Art/a.png", "a\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 1, "commit", "-q", "-m", "create");
+            repo.CommitAllAt(1, "create");
             repo.RunGit("switch", "-q", "-c", "side");
             repo.Write("Assets/Art/a.png", "side\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 2, "commit", "-q", "-m", "side edit");
+            repo.CommitAllAt(2, "side edit");
             repo.RunGit("switch", "-q", "main");
             repo.Write("Assets/Other/o.txt", "o\n");
-            repo.RunGit("add", "-A");
-            CommitAt(repo, 3, "commit", "-q", "-m", "elsewhere");
-            CommitAt(repo, 4, "merge", "-q", "-s", "ours", "-m", "merge side keeping ours", "side");
+            repo.CommitAllAt(3, "elsewhere");
+            repo.RunGitAt(4, "merge", "-q", "-s", "ours", "-m", "merge side keeping ours", "side");
             var git = repo.Git;
 
-            var history = git.FolderHistory(repo.Head, "Assets/Art", withMeta: false);
+            var history = git.FileHistory(repo.Head, "Assets/Art", withMeta: false, followRenames: false);
 
             CollectionAssert.AreEquivalent(new[] { "side edit", "create" },
                 Subjects(git, history.Commits, history.Unpushed));
@@ -1006,7 +851,7 @@ namespace Upwake.Vetka.Tests
         public void FileHistory_MarksUnpushedCommits()
         {
             using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
+            using var local = remote.PublishBase();
             local.Write("f.txt", "local\n");
             local.CommitAll("local f");
             local.Write("g.txt", "g\n");
@@ -1020,43 +865,20 @@ namespace Upwake.Vetka.Tests
             CollectionAssert.AreEqual(new[] { false, true }, commits.Select(commit => commit.IsPushed));
         }
 
-        private static void CommitAt(TestRepository repo, int second, params string[] arguments)
-        {
-            var date = $"2026-01-01T00:00:{second:00}Z";
-            var (exitCode, output, error) = repo.RunGitWith(new Dictionary<string, string>
-            {
-                ["GIT_AUTHOR_DATE"] = date,
-                ["GIT_COMMITTER_DATE"] = date
-            }, arguments);
-            Assert.AreEqual(0, exitCode, $"git {string.Join(" ", arguments)} failed:\n{error}\n{output}");
-        }
-
         private static IEnumerable<string> Subjects(Git git, List<string> hashes, HashSet<string> unpushed) =>
             git.ReadCommits(hashes, unpushed).Commits.Select(commit => commit.Subject);
-
-        [Test]
-        public void ReadLogPage_BeforeTheFirstCommit_IsEmpty()
-        {
-            using var repo = TestRepository.Create();
-
-            var page = repo.Git.ReadLogPage(null, 0, 10);
-
-            Assert.IsTrue(page.Result.IsSuccess, page.Result.Message);
-            Assert.AreEqual(0, page.Commits.Count);
-            Assert.IsNull(page.Head);
-        }
 
         [Test]
         public void Push_BranchCreatedFromARemoteBranch_GoesToItsOwnName()
         {
             using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
+            using var local = remote.PublishBase();
             var git = local.Git;
             Assert.IsTrue(git.CreateBranch("feat", "origin/main", checkout: true).IsSuccess);
             Assert.AreEqual("origin/main", git.UpstreamBranch());
             local.Write("feat.txt", "feat\n");
             local.CommitAll("feat commit");
-            Assert.AreEqual(1, git.OutgoingCommits().Count);
+            Assert.AreEqual(1, git.OutgoingCommits(git.PushTarget()).Count);
 
             var result = git.Push();
 
@@ -1065,9 +887,9 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feat"));
             Assert.AreNotEqual(local.Head, remote.RunGit("rev-parse", "main"));
             Assert.AreEqual("origin/main", git.UpstreamBranch());
-            Assert.AreEqual(0, git.OutgoingCommits().Count);
+            Assert.AreEqual(0, git.OutgoingCommits(git.PushTarget()).Count);
             Assert.IsTrue(git.IsHeadPushed());
-            Assert.IsTrue(git.Log().All(commit => commit.IsPushed));
+            Assert.IsTrue(git.ReadLogPage(null, 0, 50).Commits.All(commit => commit.IsPushed));
 
             local.Write("feat.txt", "next\n");
             var next = git.CommitAndPush(new[] { "feat.txt" }, "next", out _);
@@ -1077,86 +899,10 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
-        public void Push_WithTheOnlyRemoteNotNamedOrigin_UsesIt()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("remote", "rename", "origin", "upstream");
-            local.RunGit("switch", "-q", "-c", "feature");
-            local.Write("feature.txt", "feature\n");
-            local.CommitAll("feature commit");
-
-            var result = local.Git.Push();
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Pushed 1 commit to new branch upstream/feature", result.Message);
-            Assert.AreEqual("upstream/feature", local.Git.UpstreamBranch());
-            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feature"));
-        }
-
-        [Test]
-        public void Push_FollowsRemotePushDefault()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var fork = TestRepository.CreateBare("fork.git");
-            using var local = PublishBase(remote);
-            local.RunGit("remote", "add", "fork", fork.Root);
-            local.RunGit("config", "remote.pushDefault", "fork");
-            var originMain = remote.RunGit("rev-parse", "main");
-            local.Write("f.txt", "for the fork\n");
-            local.CommitAll("fork commit");
-
-            var result = local.Git.Push();
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Pushed 2 commits to new branch fork/main", result.Message);
-            Assert.AreEqual(local.Head, fork.RunGit("rev-parse", "main"));
-            Assert.AreEqual(originMain, remote.RunGit("rev-parse", "main"));
-            Assert.AreEqual("origin/main", local.Git.UpstreamBranch());
-        }
-
-        [Test]
-        public void Push_RemoteAndBranchWithDotsInTheirNames()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("remote", "rename", "origin", "my.fork");
-            local.RunGit("switch", "-q", "-c", "feature/v1.2");
-            local.Write("v.txt", "v\n");
-            local.CommitAll("v");
-
-            var result = local.Git.Push();
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Pushed 1 commit to new branch my.fork/feature/v1.2", result.Message);
-            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "feature/v1.2"));
-            Assert.AreEqual("Everything is up to date", local.Git.Push().Message);
-        }
-
-        [Test]
-        public void Push_WithoutAClearRemote_Refuses()
-        {
-            using var lonely = TestRepository.Create();
-            lonely.Write("f.txt", "f\n");
-            lonely.CommitAll("base");
-
-            Assert.AreEqual("This repository has no remote to push to", lonely.Git.Push().Message);
-
-            using var first = TestRepository.CreateBare("first.git");
-            using var second = TestRepository.CreateBare("second.git");
-            lonely.RunGit("remote", "add", "first", first.Root);
-            lonely.RunGit("remote", "add", "second", second.Root);
-
-            Assert.AreEqual("Cannot choose a remote to push to, set remote.pushDefault", lonely.Git.Push().Message);
-            Assert.AreEqual("", first.RunGit("for-each-ref"));
-            Assert.AreEqual("", second.RunGit("for-each-ref"));
-        }
-
-        [Test]
         public void CheckoutRemote_CreatesATrackingBranch()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             upstream.RunGit("switch", "-q", "-c", "feature");
             upstream.Write("feature.txt", "feature\n");
             upstream.CommitAll("feature");
@@ -1242,9 +988,9 @@ namespace Upwake.Vetka.Tests
 
             Assert.AreEqual("Branch merged deleted", git.DeleteBranch("merged", false).Message);
             Assert.IsFalse(git.DeleteBranch("unmerged", false).IsSuccess);
-            Assert.IsTrue(git.Branches().Any(branch => branch.Name == "unmerged"));
+            Assert.IsTrue(git.ReadBranches().Branches.Any(branch => branch.Name == "unmerged"));
             Assert.IsTrue(git.DeleteBranch("unmerged", true).IsSuccess);
-            CollectionAssert.AreEqual(new[] { "main" }, git.Branches().Select(branch => branch.Name));
+            CollectionAssert.AreEqual(new[] { "main" }, git.ReadBranches().Branches.Select(branch => branch.Name));
         }
 
         [Test]
@@ -1294,7 +1040,7 @@ namespace Upwake.Vetka.Tests
             repo.Delete("gone.txt");
             repo.Write("other.txt", "o2\n");
 
-            var result = repo.Git.Rollback(Files("mod.txt", "staged.txt", "del.txt", "rm.txt", "added.txt", "gone.txt"), false);
+            var result = repo.Git.Rollback(TestRepository.Files("mod.txt", "staged.txt", "del.txt", "rm.txt", "added.txt", "gone.txt"), false);
 
             Assert.IsTrue(result.IsSuccess, result.Message);
             Assert.AreEqual("6 files rolled back", result.Message);
@@ -1321,7 +1067,7 @@ namespace Upwake.Vetka.Tests
             repo.Write("Assets/a.prefab.meta", "guid: 3\n");
             repo.Write("Assets/b.txt.meta", "guid: 4\n");
 
-            var result = repo.Git.Rollback(Files("Assets/a.prefab", "Assets/a.prefab.meta", "Assets/b.txt.meta"), false);
+            var result = repo.Git.Rollback(TestRepository.Files("Assets/a.prefab", "Assets/a.prefab.meta", "Assets/b.txt.meta"), false);
 
             Assert.AreEqual("3 files rolled back", result.Message);
             Assert.AreEqual("", repo.RunGit("status", "--porcelain"));
@@ -1341,46 +1087,13 @@ namespace Upwake.Vetka.Tests
             repo.Write("new.txt", "n\n");
             repo.RunGit("add", "new.txt");
 
-            var result = repo.Git.Rollback(Files("mod.txt", "added.txt", "new.txt"), deleteAdded: true);
+            var result = repo.Git.Rollback(TestRepository.Files("mod.txt", "added.txt", "new.txt"), deleteAdded: true);
 
             Assert.IsTrue(result.IsSuccess, result.Message);
             Assert.AreEqual("m\n", repo.Read("mod.txt"));
             Assert.IsFalse(repo.Exists("added.txt"));
             Assert.IsFalse(repo.Exists("new.txt"));
             Assert.AreEqual("", repo.RunGit("status", "--porcelain"));
-        }
-
-        [Test]
-        public void LocalIdentity_IsReadAndWritten()
-        {
-            using var repo = TestRepository.Create();
-            var git = repo.Git;
-
-            var identity = git.Identity(global: false);
-            Assert.AreEqual("Test", identity.Name);
-            Assert.AreEqual("test@example.com", identity.Email);
-
-            var result = git.SetIdentity(new GitIdentity("Иван Тест", "ivan@example.com"), global: false);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Иван Тест", repo.RunGit("config", "--local", "user.name"));
-            Assert.AreEqual("ivan@example.com", repo.RunGit("config", "--local", "user.email"));
-            Assert.IsFalse(git.SetIdentity(new GitIdentity("Name", ""), global: false).IsSuccess);
-        }
-
-        [Test]
-        public void Identity_ReadsIncludedConfigFiles()
-        {
-            using var repo = TestRepository.Create();
-            repo.RunGit("config", "--unset", "user.name");
-            repo.RunGit("config", "--unset", "user.email");
-            repo.Write(".git/identity.gitconfig", "[user]\n\tname = Included Name\n\temail = included@example.com\n");
-            repo.RunGit("config", "include.path", "identity.gitconfig");
-
-            var identity = repo.Git.Identity(global: false);
-
-            Assert.AreEqual("Included Name", identity.Name);
-            Assert.AreEqual("included@example.com", identity.Email);
         }
 
         [Test]
@@ -1421,11 +1134,9 @@ namespace Upwake.Vetka.Tests
         public void CommitAndPush_WhenThePushIsRejected_SaysTheCommitWasMade()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
+            upstream.PushChange("f.txt", "theirs");
             local.Write("g.txt", "mine\n");
 
             var result = local.Git.CommitAndPush(new[] { "g.txt" }, "mine", out var committed);
@@ -1478,59 +1189,12 @@ namespace Upwake.Vetka.Tests
             repo.Write("a.txt", "a\n");
             repo.CommitAll("base");
             repo.Write("a.txt", "changed\n");
-            var git = repo.GitWithVariable("GIT_DIR", Path.Combine(repo.BaseDirectory, "elsewhere.git"));
+            var git = repo.GitWithVariables(new Dictionary<string, string>
+            {
+                ["GIT_DIR"] = Path.Combine(repo.BaseDirectory, "elsewhere.git")
+            });
 
             Assert.AreEqual(true, git.HasUncommittedChanges());
-        }
-
-        [Test]
-        public void GitMessages_AreReadInEnglishWhateverLanguageTheUserHas()
-        {
-            using var repo = TestRepository.Create();
-            repo.Write("a.txt", "a\n");
-            repo.CommitAll("base");
-            var korean = new Dictionary<string, string>
-            {
-                ["GIT_TEXTDOMAINDIR"] = TranslatedGitMessages(repo.BaseDirectory),
-                ["LANG"] = "ko_KR.UTF-8",
-                ["LC_ALL"] = "ko_KR.UTF-8",
-                ["LANGUAGE"] = "ko"
-            };
-            Assume.That(repo.RunGitWith(korean, "branch", "-d", "missing").error, Does.StartWith("ERROR-KO: "),
-                "git is built without translations");
-
-            var result = repo.GitWithVariables(korean).DeleteBranch("missing", force: false);
-
-            Assert.IsFalse(result.IsSuccess);
-            StringAssert.StartsWith("branch 'missing' not found", result.Message);
-        }
-
-        [Test]
-        public void TestRepositories_DoNotReadTheUsersGitConfig()
-        {
-            using var repo = TestRepository.Create();
-
-            var scopes = repo.RunGit("config", "--list", "--show-scope");
-
-            StringAssert.DoesNotContain("system", scopes);
-            StringAssert.DoesNotContain("global", scopes);
-        }
-
-        [Test]
-        public void GlobalIdentity_IsReadAndWritten()
-        {
-            using var repo = TestRepository.Create();
-            var git = repo.Git;
-
-            var before = git.Identity(global: true);
-            var result = git.SetIdentity(new GitIdentity("Global Name", "global@example.com"), global: true);
-
-            Assert.AreEqual("", before.Name);
-            Assert.AreEqual("", before.Email);
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            StringAssert.Contains("global@example.com", File.ReadAllText(repo.GlobalConfig));
-            Assert.AreEqual("Global Name", git.Identity(global: true).Name);
-            Assert.AreEqual("Test", git.Identity(global: false).Name);
         }
 
         [Test]
@@ -1553,7 +1217,7 @@ namespace Upwake.Vetka.Tests
         public void CommitAndPush_ReportsBothInOneLine()
         {
             using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
+            using var local = remote.PublishBase();
             local.Write("f.txt", "changed\n");
 
             var result = local.Git.CommitAndPush(new[] { "f.txt" }, "change f\n\ndetails", out var committed);
@@ -1565,29 +1229,10 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
-        public void Push_BehindTheRemote_IsRejectedWithAShortMessage()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
-            local.Write("g.txt", "mine\n");
-            local.CommitAll("mine");
-
-            var result = local.Git.Push();
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.IsTrue(result.IsRejected);
-            Assert.AreEqual("Push rejected: origin/main has commits that main does not have", result.Message);
-        }
-
-        [Test]
         public void UpdateAndPush_OnABranchMadeFromMain_TakesItsOwnRemoteBranch()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             var git = local.Git;
             Assert.IsTrue(git.CreateBranch("feature", "origin/main", checkout: true).IsSuccess);
@@ -1620,7 +1265,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateAndPush_WithANarrowFetchRefspec_TakesTheBranchEveryTime()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             local.RunGit("switch", "-q", "-c", "feature");
             local.Write("g.txt", "mine 1\n");
@@ -1653,11 +1298,9 @@ namespace Upwake.Vetka.Tests
         public void UpdateAndPush_WhenTheFetchFails_ReportsTheFetchError()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
+            upstream.PushChange("f.txt", "theirs");
             local.Write("g.txt", "mine\n");
             local.CommitAll("mine");
             var git = local.Git;
@@ -1673,34 +1316,10 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
-        public void ForcePush_ToABranchDeletedOnTheRemote_SaysSoAndForgetsIt()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("switch", "-q", "-c", "feature");
-            local.Write("f.txt", "one\n");
-            local.CommitAll("one");
-            local.Write("f.txt", "two\n");
-            local.CommitAll("two");
-            local.RunGit("push", "-q", "-u", "origin", "feature");
-            var git = local.Git;
-            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
-            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
-            remote.RunGit("branch", "-D", "feature");
-
-            var result = git.Push(seen.Tracked, seen.Head);
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.AreEqual("Force push stopped: origin/feature no longer exists on the remote, push again to create it",
-                result.Message);
-            Assert.IsFalse(git.PushTarget().Value.Exists);
-        }
-
-        [Test]
         public void UpdateAndPush_WhenTheRemoteBranchWasDeleted_SaysSoAndPushesIt()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             local.RunGit("switch", "-q", "-c", "feature");
             local.Write("g.txt", "mine 1\n");
@@ -1731,7 +1350,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateAndPush_WhenTheRemoteBranchWasDeletedAndHadNothingNew_SaysOnlyThatItWasGone()
         {
             using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
+            using var local = remote.PublishBase();
             local.RunGit("switch", "-q", "-c", "feature");
             local.Write("g.txt", "mine 1\n");
             local.CommitAll("mine 1");
@@ -1752,12 +1371,10 @@ namespace Upwake.Vetka.Tests
         public void UpdateAndPush_OnABranchWithoutUpstream_TakesTheRemoteBranchOfTheSameName()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             local.RunGit("branch", "--unset-upstream");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
+            upstream.PushChange("f.txt", "theirs");
             local.Write("g.txt", "mine\n");
             local.CommitAll("mine");
             var git = local.Git;
@@ -1776,11 +1393,9 @@ namespace Upwake.Vetka.Tests
         public void UpdateAndPush_AfterARejectedPush_BringsTheirCommitsAndPushesMine(UpdateStrategy strategy)
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
+            upstream.PushChange("f.txt", "theirs");
             var theirs = upstream.Head;
             local.Write("g.txt", "mine\n");
             local.CommitAll("mine");
@@ -1811,7 +1426,7 @@ namespace Upwake.Vetka.Tests
         {
             using var remote = TestRepository.CreateBare();
             using var local = remote.Clone("local");
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
 
             var result = local.Git.UpdateProject(strategy);
 
@@ -1825,7 +1440,7 @@ namespace Upwake.Vetka.Tests
         public void Push_WithAFetchRefspecThatSkipsTheBranch_StillRecordsWhatWasPushed()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             local.RunGit("config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
             local.RunGit("switch", "-q", "-c", "feature");
@@ -1847,7 +1462,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_WithAFetchRefspecThatSkipsTheBranch_TakesItsCommits()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             local.RunGit("config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
             local.RunGit("switch", "-q", "-c", "feature");
@@ -1857,9 +1472,7 @@ namespace Upwake.Vetka.Tests
             var git = local.Git;
             using var colleague = remote.Clone("colleague");
             colleague.RunGit("switch", "-q", "feature");
-            colleague.Write("theirs.txt", "theirs\n");
-            colleague.CommitAll("theirs");
-            colleague.RunGit("push", "-q");
+            colleague.PushChange("theirs.txt", "theirs");
 
             var result = git.UpdateProject(UpdateStrategy.Merge);
 
@@ -1872,7 +1485,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateAndPush_WhenTheMergeLeavesAFileModified_StillPushesAndSaysSo()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             upstream.Write(".gitattributes", "*.dat text eol=lf\n");
             upstream.CommitAll("attributes");
             upstream.RunGit("push", "-q");
@@ -1903,104 +1516,6 @@ namespace Upwake.Vetka.Tests
             StringAssert.EndsWith("\nPushed 2 commits to origin/main", result.Message);
             Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
             Assert.AreEqual("local change\n", local.Read("f.txt"));
-        }
-
-        [Test]
-        public void ForcePush_AfterUndoingAPushedCommit_RemovesItFromTheRemote()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            var start = local.Head;
-            local.Write("f.txt", "pushed by mistake\n");
-            local.CommitAll("mistake");
-            local.RunGit("push", "-q");
-            var git = local.Git;
-            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
-            var target = git.PushTarget().Value;
-
-            var seen = git.RemoteOnlyCommits(target);
-            var result = git.Push(seen.Tracked);
-
-            Assert.AreEqual(1, seen.Count);
-            StringAssert.EndsWith("mistake", seen.Commits[0]);
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Force pushed to origin/main: 1 commit removed", result.Message);
-            Assert.AreEqual(start, remote.RunGit("rev-parse", "main"));
-            Assert.AreEqual(0, git.RemoteOnlyCommits(target).Count);
-        }
-
-        [Test]
-        public void ForcePush_AfterTheBranchMovedSinceItWasShown_ChangesNothing()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.Write("f.txt", "one\n");
-            local.CommitAll("one");
-            local.Write("f.txt", "two\n");
-            local.CommitAll("two");
-            local.RunGit("push", "-q");
-            var git = local.Git;
-            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
-            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
-            Assert.IsTrue(git.UndoLastCommit(local.Head).IsSuccess);
-            var remoteHead = remote.RunGit("rev-parse", "main");
-
-            var result = git.Push(seen.Tracked, seen.Head);
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.AreEqual("Force push stopped: main has changed since the Push window showed it, look at it again",
-                result.Message);
-            Assert.AreEqual(remoteHead, remote.RunGit("rev-parse", "main"));
-        }
-
-        [Test]
-        public void ForcePush_ReplacesTheirCommitsWithYours()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
-            local.RunGit("fetch", "-q");
-            local.Write("g.txt", "mine\n");
-            local.CommitAll("mine");
-            var git = local.Git;
-
-            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
-            var result = git.Push(seen.Tracked);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Force pushed to origin/main: 1 commit pushed, 1 commit removed", result.Message);
-            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
-        }
-
-        [Test]
-        public void ForcePush_WhenTheRemoteMovedSinceItWasShown_ChangesNothing()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
-            local.RunGit("fetch", "-q");
-            local.Write("g.txt", "mine\n");
-            local.CommitAll("mine");
-            var git = local.Git;
-            var seen = git.RemoteOnlyCommits(git.PushTarget().Value);
-            upstream.Write("f.txt", "theirs again\n");
-            upstream.CommitAll("theirs again");
-            upstream.RunGit("push", "-q");
-            var remoteHead = remote.RunGit("rev-parse", "main");
-
-            var result = git.Push(seen.Tracked);
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.AreEqual("Force push rejected: origin/main has changed on the remote since the Push window showed it. " +
-                            "The window now shows its current state, check it and try again", result.Message);
-            Assert.AreEqual(remoteHead, remote.RunGit("rev-parse", "main"));
-            StringAssert.EndsWith("theirs again", git.RemoteOnlyCommits(git.PushTarget().Value).Commits[0]);
         }
 
         [Test]
@@ -2134,25 +1649,6 @@ namespace Upwake.Vetka.Tests
             Assert.IsTrue(repo.Exists(".git/vetka-interrupted"));
             Assert.AreEqual(Path.GetFullPath(Path.Combine(repo.Root, ".git", "vetka-interrupted")),
                 interruption.Value.MarkerPath);
-        }
-
-        [Test]
-        public void SetIdentity_WritesOnlyTheValuesThatChanged()
-        {
-            using var repo = TestRepository.Create();
-            repo.RunGit("config", "--unset", "user.name");
-            repo.RunGit("config", "--unset", "user.email");
-            var git = repo.Git;
-
-            var same = git.SetIdentity(new GitIdentity("A", "a@example.com"), false,
-                new GitIdentity("A", "a@example.com"));
-            var changed = git.SetIdentity(new GitIdentity("A", "b@example.com"), false,
-                new GitIdentity("A", "a@example.com"));
-
-            Assert.IsTrue(same.IsSuccess, same.Message);
-            Assert.IsTrue(changed.IsSuccess, changed.Message);
-            Assert.AreNotEqual(0, repo.TryRunGit("config", "--local", "--get", "user.name"));
-            Assert.AreEqual("b@example.com", repo.RunGit("config", "--local", "--get", "user.email"));
         }
 
         [Test]
@@ -2343,42 +1839,6 @@ namespace Upwake.Vetka.Tests
             return (task.Result, watch.Elapsed);
         }
 
-        private static string TranslatedGitMessages(string directory)
-        {
-            var messages = new SortedDictionary<string, string>(StringComparer.Ordinal)
-            {
-                [""] = "Content-Type: text/plain; charset=UTF-8\n",
-                ["error: "] = "ERROR-KO: ",
-                ["fatal: "] = "FATAL-KO: "
-            };
-            var strings = messages.Keys.Concat(messages.Values).Select(Encoding.UTF8.GetBytes).ToList();
-            var count = messages.Count;
-            var catalogs = Path.Combine(directory, "locale");
-            var folder = Path.Combine(catalogs, "ko", "LC_MESSAGES");
-            Directory.CreateDirectory(folder);
-            using var writer = new BinaryWriter(File.Create(Path.Combine(folder, "git.mo")));
-            foreach (var value in new uint[] { 0x950412de, 0, (uint)count, 28, (uint)(28 + 8 * count), 0, 0 })
-            {
-                writer.Write(value);
-            }
-
-            var position = 28 + 16 * count;
-            foreach (var value in strings)
-            {
-                writer.Write((uint)value.Length);
-                writer.Write((uint)position);
-                position += value.Length + 1;
-            }
-
-            foreach (var value in strings)
-            {
-                writer.Write(value);
-                writer.Write((byte)0);
-            }
-
-            return catalogs;
-        }
-
         private static void AssertStops(HangingCommand hanging)
         {
             var deadline = DateTime.UtcNow.AddSeconds(5);
@@ -2389,9 +1849,6 @@ namespace Upwake.Vetka.Tests
 
             Assert.IsFalse(hanging.Running, "A process started by git is still running");
         }
-
-        private static IEnumerable<GitFileChange> Files(params string[] paths) =>
-            paths.Select(path => new GitFileChange(GitStatus.Unknown, path));
 
         [Test]
         public void ReadLog_ShowsTheTagsOfEachCommit()
@@ -2418,173 +1875,10 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
-        public void CreateTag_WithoutAMessage_MakesALightweightTagEvenWhenTheUserSignsTags()
-        {
-            using var repo = TestRepository.Create();
-            repo.Write("a.txt", "1\n");
-            repo.CommitAll("first");
-            repo.RunGit("config", "tag.gpgSign", "true");
-            var head = repo.RunGit("rev-parse", "--short", "HEAD");
-
-            var result = repo.Git.CreateTag("v1", head, "  ");
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual($"Tag v1 created on {head}", result.Message);
-            Assert.AreEqual("commit", repo.RunGit("cat-file", "-t", "refs/tags/v1"));
-            Assert.AreEqual(repo.Head, repo.RunGit("rev-parse", "v1"));
-        }
-
-        [Test]
-        public void CreateTag_WithAMessage_MakesAnAnnotatedTagThatKeepsTheMessage()
-        {
-            using var repo = TestRepository.Create();
-            repo.Write("a.txt", "1\n");
-            repo.CommitAll("first");
-            var head = repo.RunGit("rev-parse", "--short", "HEAD");
-
-            var result = repo.Git.CreateTag(" v1 ", head, "Release 1\n\n# not a comment\n");
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("tag", repo.RunGit("cat-file", "-t", "refs/tags/v1"));
-            Assert.AreEqual(repo.Head, repo.RunGit("rev-parse", "v1^{commit}"));
-            Assert.AreEqual("Release 1\n\n# not a comment",
-                repo.RunGit("for-each-ref", "--format=%(contents)", "refs/tags/v1").Trim());
-        }
-
-        [TestCase("bad name")]
-        [TestCase("-x")]
-        [TestCase("a..b")]
-        [TestCase("HEAD")]
-        public void CreateTag_WithAnInvalidName_Refuses(string name)
-        {
-            using var repo = TestRepository.Create();
-            repo.Write("a.txt", "1\n");
-            repo.CommitAll("first");
-
-            var result = repo.Git.CreateTag(name, repo.Head, "");
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.AreEqual($"'{name}' is not a valid tag name", result.Message);
-            Assert.AreEqual("", repo.RunGit("tag", "-l"));
-        }
-
-        [Test]
-        public void CreateTag_ThatAlreadyExists_ChangesNothing()
-        {
-            using var repo = TestRepository.Create();
-            repo.Write("a.txt", "1\n");
-            repo.CommitAll("first");
-            repo.RunGit("tag", "v1");
-            var first = repo.Head;
-            repo.Write("a.txt", "2\n");
-            repo.CommitAll("second");
-
-            var result = repo.Git.CreateTag("v1", repo.Head, "moved");
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.AreEqual("Tag v1 already exists", result.Message);
-            Assert.AreEqual(first, repo.RunGit("rev-parse", "v1"));
-        }
-
-        [Test]
-        public void DeleteTag_OnlyHere_KeepsItOnTheRemote()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("tag", "v1");
-            local.RunGit("push", "-q", "origin", "v1");
-
-            var result = local.Git.DeleteTag("v1", false);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Tag v1 deleted", result.Message);
-            Assert.AreEqual("", local.RunGit("tag", "-l"));
-            Assert.AreEqual("v1", remote.RunGit("tag", "-l"));
-        }
-
-        [Test]
-        public void DeleteTag_HereAndOnTheRemote_RemovesBoth()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("tag", "-a", "-m", "release", "v1");
-            local.RunGit("push", "-q", "origin", "v1");
-
-            var result = local.Git.DeleteTag("v1", true);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Tag v1 deleted here and on origin", result.Message);
-            Assert.AreEqual("", local.RunGit("tag", "-l"));
-            Assert.AreEqual("", remote.RunGit("tag", "-l"));
-        }
-
-        [Test]
-        public void DeleteTag_OnTheRemoteWithoutABranchCheckedOut_UsesTheDefaultRemote()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("tag", "v1");
-            local.RunGit("push", "-q", "origin", "v1");
-            local.RunGit("switch", "-q", "--detach");
-
-            var result = local.Git.DeleteTag("v1", true);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("", remote.RunGit("tag", "-l"));
-        }
-
-        [Test]
-        public void DeleteTag_OnTheRemote_DoesNotSendOtherTagsWhenTheUserFollowsTags()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("tag", "old");
-            local.RunGit("push", "-q", "origin", "old");
-            local.RunGit("tag", "-a", "-m", "private", "secret");
-            local.RunGit("config", "push.followTags", "true");
-
-            var result = local.Git.DeleteTag("old", true);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("", remote.RunGit("tag", "-l"));
-        }
-
-        [Test]
-        public void DeleteTag_OnTheRemoteWhereItIsMissing_SaysSoAndDeletesItHere()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("tag", "v1");
-
-            var result = local.Git.DeleteTag("v1", true);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Tag v1 deleted, it was not on origin", result.Message);
-            Assert.AreEqual("", local.RunGit("tag", "-l"));
-        }
-
-        [Test]
-        public void Push_WithTagsOfTheCurrentBranch_SendsAnnotatedTagsOnThePushedCommits()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.Write("f.txt", "next\n");
-            local.CommitAll("next");
-            local.RunGit("tag", "-a", "-m", "release", "v1");
-            local.RunGit("tag", "light");
-
-            var result = local.Git.Push(tags: PushTags.CurrentBranch);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Pushed 1 commit and 1 tag to origin/main", result.Message);
-            Assert.AreEqual("v1", remote.RunGit("tag", "-l"));
-        }
-
-        [Test]
         public void CommitAndPush_WithTagsOfTheCurrentBranch_SendsThemAndSaysSo()
         {
             using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
+            using var local = remote.PublishBase();
             local.Write("f.txt", "tagged\n");
             local.CommitAll("tagged");
             local.RunGit("tag", "-a", "-m", "release", "v1");
@@ -2599,166 +1893,12 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
-        public void Push_WithAllTags_SendsThemEvenWithoutNewCommits()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var local = PublishBase(remote);
-            local.RunGit("tag", "-a", "-m", "release", "v1");
-            local.RunGit("tag", "light");
-
-            var result = local.Git.Push(tags: PushTags.All);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Pushed 2 tags to origin", result.Message);
-            CollectionAssert.AreEquivalent(new[] { "light", "v1" },
-                remote.RunGit("tag", "-l").Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries));
-        }
-
-        [Test]
-        public void Push_WithATagTheRemoteHasOnAnotherCommit_PushesTheCommitsAndNamesTheTag()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            upstream.RunGit("tag", "v1");
-            upstream.RunGit("push", "-q", "origin", "v1");
-            using var local = remote.Clone("local");
-            local.RunGit("tag", "-d", "v1");
-            local.Write("g.txt", "mine\n");
-            local.CommitAll("mine");
-            local.RunGit("tag", "v1");
-
-            var result = local.Git.Push(tags: PushTags.All);
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.AreEqual("Pushed 1 commit to origin/main, but origin already has tag v1 on another commit",
-                result.Message);
-            Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
-            Assert.AreEqual(upstream.Head, remote.RunGit("rev-parse", "v1"));
-        }
-
-        [Test]
-        public void Push_WithARefusedTagAndAFetchRefspecThatSkipsTheBranch_RecordsThePushedCommits()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            upstream.RunGit("tag", "v1");
-            upstream.RunGit("push", "-q", "origin", "v1");
-            using var local = remote.Clone("local");
-            local.RunGit("config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
-            local.RunGit("tag", "-d", "v1");
-            local.RunGit("switch", "-q", "-c", "feature");
-            local.Write("g.txt", "mine\n");
-            local.CommitAll("mine");
-            local.RunGit("tag", "v1");
-
-            var result = local.Git.Push(tags: PushTags.All);
-
-            Assert.IsTrue(result.IsDone, result.Message);
-            Assert.AreEqual("Pushed 1 commit to new branch origin/feature, but origin already has tag v1 on another commit",
-                result.Message);
-            Assert.AreEqual(local.Head, local.RunGit("rev-parse", "refs/remotes/origin/feature"));
-            Assert.AreEqual(0, local.Git.OutgoingCommits().Count);
-        }
-
-        [TestCase(PushTags.CurrentBranch)]
-        [TestCase(PushTags.All)]
-        public void Push_OfTagsOnlyWhileTheRemoteIsAhead_ReportsTheTagsAndOffersNoUpdate(PushTags mode)
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
-            local.RunGit("tag", "-a", "-m", "release", "v1");
-            local.RunGit("fetch", "-q");
-            var mine = local.Head;
-
-            var result = local.Git.Push(tags: mode);
-
-            Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.IsFalse(result.IsRejected);
-            Assert.AreEqual("Pushed 1 tag to origin", result.Message);
-            Assert.AreEqual("v1", remote.RunGit("tag", "-l"));
-            Assert.AreEqual(mine, local.Head);
-        }
-
-        [Test]
-        public void Push_OfATagTheServerRefusesWhileTheRemoteIsAhead_ShowsTheServerError()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
-            remote.Write("hooks/pre-receive",
-                "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/tags/*) " +
-                "echo 'protected tag' >&2; exit 1;; esac; done\nexit 0\n");
-            local.RunGit("tag", "-a", "-m", "release", "v1");
-            local.RunGit("fetch", "-q");
-
-            var result = local.Git.Push(tags: PushTags.All);
-
-            Assert.IsFalse(result.IsSuccess);
-            Assert.IsFalse(result.IsRejected);
-            StringAssert.Contains("protected tag", result.Message);
-            Assert.AreEqual("", remote.RunGit("tag", "-l"));
-        }
-
-        [Test]
-        public void Push_RejectedBecauseOfNewCommits_SaysWhichTagsWentAnyway()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
-            local.RunGit("tag", "base-tag");
-            local.Write("g.txt", "mine\n");
-            local.CommitAll("mine");
-
-            var result = local.Git.Push(tags: PushTags.All);
-
-            Assert.IsTrue(result.IsRejected);
-            Assert.AreEqual("Push rejected: origin/main has commits that main does not have. 1 tag pushed anyway",
-                result.Message);
-        }
-
-        [Test]
-        public void Push_WithATagConflictAndABranchRefusedByTheServer_ShowsTheServerError()
-        {
-            using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
-            upstream.RunGit("tag", "v1");
-            upstream.RunGit("push", "-q", "origin", "v1");
-            remote.Write("hooks/pre-receive",
-                "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) " +
-                "echo 'protected branch' >&2; exit 1;; esac; done\nexit 0\n");
-            using var local = remote.Clone("local");
-            local.RunGit("tag", "-d", "v1");
-            local.Write("g.txt", "mine\n");
-            local.CommitAll("mine");
-            local.RunGit("tag", "v1");
-
-            var result = local.Git.Push(tags: PushTags.All);
-
-            Assert.IsFalse(result.IsSuccess);
-            StringAssert.Contains("protected branch", result.Message);
-            StringAssert.DoesNotStartWith("Tags not pushed", result.Message);
-            Assert.AreEqual(upstream.Head, remote.RunGit("rev-parse", "main"));
-        }
-
-        [Test]
         public void UpdateAndPush_WithTags_PushesTheTagsToo()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
+            upstream.PushChange("f.txt", "theirs");
             local.Write("g.txt", "mine\n");
             local.CommitAll("mine");
             var git = local.Git;
@@ -2771,15 +1911,6 @@ namespace Upwake.Vetka.Tests
             Assert.IsTrue(result.IsSuccess, result.Message);
             Assert.AreEqual(local.Head, remote.RunGit("rev-parse", "main"));
             Assert.AreEqual(local.RunGit("rev-parse", "v1^{commit}"), remote.RunGit("rev-parse", "v1^{commit}"));
-        }
-
-        private static TestRepository PublishBase(TestRepository remote)
-        {
-            var upstream = remote.Clone("upstream");
-            upstream.Write("f.txt", "base\n");
-            upstream.CommitAll("base");
-            upstream.RunGit("push", "-q", "-u", "origin", "main");
-            return upstream;
         }
     }
 }

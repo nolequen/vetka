@@ -50,9 +50,6 @@ namespace Upwake.Vetka.Tests
 
         public Git Git => NewGit(_variables);
 
-        public Git GitWithVariable(string name, string value) =>
-            GitWithVariables(new Dictionary<string, string> { [name] = value });
-
         public Git GitWithVariables(IReadOnlyDictionary<string, string> variables) => NewGit(WithVariables(variables));
 
         public static Git GitAt(string directory) => new Git(GitExecutable, directory, IsolatedVariables(directory));
@@ -138,11 +135,20 @@ namespace Upwake.Vetka.Tests
             return clone;
         }
 
-        public string RunGit(params string[] arguments)
+        public string RunGit(params string[] arguments) => Checked(arguments, Run(Root, _variables, arguments));
+
+        public string RunGitAt(int second, params string[] arguments)
         {
-            var (exitCode, output, error) = Run(Root, _variables, arguments);
-            Assert.AreEqual(0, exitCode, $"git {string.Join(" ", arguments)} failed:\n{error}\n{output}");
-            return output;
+            var date = $"2026-01-01T00:00:{second:00}Z";
+            var dated = new Dictionary<string, string> { ["GIT_AUTHOR_DATE"] = date, ["GIT_COMMITTER_DATE"] = date };
+            return Checked(arguments, Run(Root, WithVariables(dated), arguments));
+        }
+
+        private static string Checked(string[] arguments, (int exitCode, string output, string error) result)
+        {
+            Assert.AreEqual(0, result.exitCode,
+                $"git {string.Join(" ", arguments)} failed:\n{result.error}\n{result.output}");
+            return result.output;
         }
 
         public int TryRunGit(params string[] arguments) => Run(Root, _variables, arguments).exitCode;
@@ -183,7 +189,35 @@ namespace Upwake.Vetka.Tests
             RunGit("commit", "-q", "-m", message);
         }
 
+        public void CommitAllAt(int second, string message)
+        {
+            RunGit("add", "-A");
+            RunGitAt(second, "commit", "-q", "-m", message);
+        }
+
+        public TestRepository PublishBase()
+        {
+            var upstream = Clone("upstream");
+            upstream.Write("f.txt", "base\n");
+            upstream.Write("o.txt", "o\n");
+            upstream.CommitAll("base");
+            upstream.RunGit("push", "-q", "-u", "origin", "main");
+            return upstream;
+        }
+
+        public void PushChange(string path, string content)
+        {
+            Write(path, content + "\n");
+            CommitAll(content);
+            RunGit("push", "-q");
+        }
+
+        public static IEnumerable<GitFileChange> Files(params string[] paths) =>
+            paths.Select(path => new GitFileChange(GitStatus.Unknown, path));
+
         public string Head => RunGit("rev-parse", "HEAD");
+
+        public string Short(string revision) => RunGit("rev-parse", "--short", revision);
 
         public string CurrentBranch => RunGit("rev-parse", "--abbrev-ref", "HEAD");
 

@@ -9,7 +9,6 @@ namespace Upwake.Vetka.Tests
     internal class GitParsingTests
     {
         [TestCase('?', '?', GitStatus.Untracked)]
-        [TestCase('!', '!', GitStatus.Ignored)]
         [TestCase(' ', 'M', GitStatus.Modified)]
         [TestCase('M', ' ', GitStatus.Modified)]
         [TestCase('A', ' ', GitStatus.Added)]
@@ -338,7 +337,7 @@ namespace Upwake.Vetka.Tests
             {
                 var git = TestRepository.GitAt(directory);
 
-                Assert.IsFalse(git.ReadLog().Result.IsSuccess);
+                Assert.IsFalse(git.ReadLogPage(null, 0, 50).Result.IsSuccess);
                 Assert.IsFalse(git.StashList().Result.IsSuccess);
                 Assert.IsFalse(git.ReadBranches().Result.IsSuccess);
                 var update = git.UpdateProject(UpdateStrategy.Merge);

@@ -65,7 +65,7 @@ namespace Upwake.Vetka
                           $"Your local changes are saved in {found.Stash} \"{found.StashMessage}\".";
             if (found.InProgress != null)
             {
-                message += $"\n\n{char.ToUpperInvariant(found.InProgress[0])}{found.InProgress.Substring(1)} " +
+                message += $"\n\n{Texts.Capitalized(found.InProgress)} " +
                            "is still in progress, finish or abort it before restoring them.";
             }
 
@@ -81,7 +81,7 @@ namespace Upwake.Vetka
 
             if (open)
             {
-                StashWindow.ShowWindow(new Git());
+                StashWindow.ShowWindow();
             }
         }
     }

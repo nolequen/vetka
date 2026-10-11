@@ -14,9 +14,7 @@ namespace Upwake.Vetka
         TypeChanged,
         Unmerged,
         Untracked,
-        Ignored,
-        Unknown,
-        Broken
+        Unknown
     }
 
     internal readonly struct GitResult
@@ -136,7 +134,7 @@ namespace Upwake.Vetka
     internal readonly struct GitBlameLine
     {
         public GitBlameLine(string hash, string author, DateTime date, string summary, string fileName, int number,
-            string text, string previous = null, string previousFileName = null)
+            string text, string previous, string previousFileName)
         {
             Hash = hash;
             Author = author;
@@ -218,14 +216,14 @@ namespace Upwake.Vetka
     internal readonly struct GitCommit
     {
         public GitCommit(string hash, string author, string date, string subject, bool isPushed,
-            IReadOnlyList<string> tags = null)
+            IReadOnlyList<string> tags)
         {
             Hash = hash;
             Author = author;
             Date = date;
             Subject = subject;
             IsPushed = isPushed;
-            Tags = tags ?? Array.Empty<string>();
+            Tags = tags;
         }
 
         public string Hash { get; }
@@ -235,5 +233,17 @@ namespace Upwake.Vetka
 
         public bool IsPushed { get; }
         public IReadOnlyList<string> Tags { get; }
+    }
+
+    internal sealed class GitComparison
+    {
+        public GitResult Result;
+        public string Current;
+        public string Tip;
+        public int OnlyHereCount;
+        public List<GitCommit> OnlyHere = new List<GitCommit>();
+        public int OnlyCurrentCount;
+        public List<GitCommit> OnlyCurrent = new List<GitCommit>();
+        public List<GitFileChange> Files = new List<GitFileChange>();
     }
 }

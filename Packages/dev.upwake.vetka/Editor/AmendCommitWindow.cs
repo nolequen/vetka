@@ -7,7 +7,6 @@ namespace Upwake.Vetka
     internal class AmendCommitWindow : EditorWindow
     {
         [NonSerialized] private Git _git;
-        private Action _onAmended;
         private string _message;
         private string _head;
         private bool _isPushed;
@@ -15,11 +14,9 @@ namespace Upwake.Vetka
         [NonSerialized] private bool _loaded;
         [NonSerialized] private bool _amending;
 
-        public static void ShowWindow(Git git, Action onAmended = null)
+        public static void ShowWindow()
         {
             var window = GetWindow<AmendCommitWindow>(utility: true, "Amend last commit");
-            window._git = git;
-            window._onAmended = onAmended;
             window.minSize = new Vector2(400, 180);
             window.Load();
         }
@@ -110,7 +107,6 @@ namespace Upwake.Vetka
             var git = _git ??= new Git();
             var message = _message;
             var head = _head;
-            var onAmended = _onAmended;
 
             GitIdentityWindow.Ensure(git, () =>
                 GitOperations.Run("Git: amending the last commit", () => git.Amend(message, head),
@@ -121,13 +117,9 @@ namespace Upwake.Vetka
                             _amending = false;
                         }
 
-                        if (result.IsSuccess)
+                        if (result.IsSuccess && this)
                         {
-                            onAmended?.Invoke();
-                            if (this)
-                            {
-                                Close();
-                            }
+                            Close();
                         }
 
                         Notification.Show(result);

@@ -8,7 +8,7 @@ namespace Upwake.Vetka
     internal class GitProjectSettings : ScriptableSingleton<GitProjectSettings>
     {
         [SerializeField] private bool _useGlobalIdentity;
-        [SerializeField] private UpdateStrategy _updateStrategy = UpdateStrategy.Ask;
+        [SerializeField] private UpdateStrategyChoice _updateStrategy = UpdateStrategyChoice.Ask;
         [SerializeField] private List<string> _favoriteBranches = new List<string>();
 
         public bool UseGlobalIdentity
@@ -26,7 +26,7 @@ namespace Upwake.Vetka
             }
         }
 
-        public UpdateStrategy UpdateStrategy
+        public UpdateStrategyChoice UpdateStrategy
         {
             get => _updateStrategy;
             set

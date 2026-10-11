@@ -45,33 +45,29 @@ namespace Upwake.Vetka
         private float _contentHeight;
         private bool _rowsDirty = true;
 
-        private GUIStyle _rowStyle;
-        private GUIStyle _boldRowStyle;
-        private GUIStyle _detailStyle;
-        private GUIStyle _placeholderStyle;
+        private static readonly SkinStyle RowStyle =
+            new SkinStyle(() => new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleLeft });
+
+        private static readonly SkinStyle BoldRowStyle =
+            new SkinStyle(() => new GUIStyle(RowStyle) { fontStyle = FontStyle.Bold });
+
+        private static readonly SkinStyle DetailStyle = new SkinStyle(() => new GUIStyle(EditorStyles.label)
+        {
+            alignment = TextAnchor.MiddleRight,
+            normal = { textColor = Color.gray }
+        });
+
+        private static readonly SkinStyle PlaceholderStyle =
+            new SkinStyle(() => new GUIStyle(EditorStyles.label) { normal = { textColor = Color.gray } });
+
+        private int _generation = -1;
+
+        public bool IsStale => _generation != GitOperations.Generation;
 
         public BranchesView(Git git, Action repaint)
         {
             _git = git;
             _repaint = repaint;
-        }
-
-        private static bool RecentExpanded
-        {
-            get => SessionState.GetBool("Vetka.Branches.Recent", true);
-            set => SessionState.SetBool("Vetka.Branches.Recent", value);
-        }
-
-        private static bool LocalExpanded
-        {
-            get => SessionState.GetBool("Vetka.Branches.Local", false);
-            set => SessionState.SetBool("Vetka.Branches.Local", value);
-        }
-
-        private static bool RemoteExpanded
-        {
-            get => SessionState.GetBool("Vetka.Branches.Remote", false);
-            set => SessionState.SetBool("Vetka.Branches.Remote", value);
         }
 
         public void Reload()
@@ -83,6 +79,7 @@ namespace Upwake.Vetka
 
             _loading = true;
             _aborted = null;
+            _generation = GitOperations.Generation;
             var git = _git;
             GitOperations.Read(
                 "Git: reading branches",
@@ -94,6 +91,7 @@ namespace Upwake.Vetka
                     {
                         _branches = null;
                         _aborted = state.branches.Result.Message;
+                        _generation = -1;
                         _rowsDirty = true;
                         _repaint();
                         return;
@@ -108,6 +106,7 @@ namespace Upwake.Vetka
                 {
                     _loading = false;
                     _aborted = reason;
+                    _generation = -1;
                     _rowsDirty = true;
                     _repaint();
                 });
@@ -116,7 +115,6 @@ namespace Upwake.Vetka
         public void OnGUI(Rect rect)
         {
             _area = rect;
-            EnsureStyles();
             if (_rowsDirty)
             {
                 _rows = BuildRows();
@@ -146,7 +144,7 @@ namespace Upwake.Vetka
             {
                 var fieldRect = GUILayoutUtility.GetLastRect();
                 GUI.Label(new Rect(fieldRect.x + 16, fieldRect.y, fieldRect.width - 16, fieldRect.height),
-                    "Search for branches and actions", _placeholderStyle);
+                    "Search for branches and actions", PlaceholderStyle);
             }
 
             GUILayout.Space(6);
@@ -184,7 +182,7 @@ namespace Upwake.Vetka
             if (_branches == null)
             {
                 EditorGUILayout.LabelField("   " + (_loading ? "Reading branches..." : _aborted ?? "Reading branches..."),
-                    _detailStyle);
+                    DetailStyle);
             }
 
             EditorGUILayout.EndScrollView();
@@ -225,7 +223,7 @@ namespace Upwake.Vetka
                 ("Update Project...", GitMenu.UpdateProject),
                 ("Commit...", GitMenu.OpenChangesWindow),
                 ("Push...", GitMenu.OpenPushWindow),
-                ("New Branch...", () => BranchActions.NewBranch(_git, current ?? "HEAD", "HEAD", Reload))
+                ("New Branch...", () => BranchActions.NewBranch(_git, current ?? "HEAD", "HEAD"))
             };
 
             foreach (var (label, action) in actions.Where(item => Matches(item.label)))
@@ -246,16 +244,17 @@ namespace Upwake.Vetka
                 .Take(5);
             var currentLocal = locals.Where(branch => branch.IsCurrent);
 
-            AddSection(rows, "Recent", currentLocal.Concat(recent).ToList(), RecentExpanded, false, Matches);
-            AddSection(rows, "Local", locals, LocalExpanded, true, Matches);
-            AddSection(rows, "Remote", _branches.Where(branch => branch.IsRemote).ToList(), RemoteExpanded,
-                true, Matches);
+            AddSection(rows, "Recent", "Vetka.Branches.Recent", true, currentLocal.Concat(recent).ToList(), false,
+                Matches);
+            AddSection(rows, "Local", "Vetka.Branches.Local", false, locals, true, Matches);
+            AddSection(rows, "Remote", "Vetka.Branches.Remote", false,
+                _branches.Where(branch => branch.IsRemote).ToList(), true, Matches);
 
             return rows;
         }
 
-        private void AddSection(List<Row> rows, string title, List<GitBranch> branches, bool expanded,
-            bool favoritesFirst, Func<string, bool> matches)
+        private void AddSection(List<Row> rows, string title, string sessionKey, bool expandedByDefault,
+            List<GitBranch> branches, bool favoritesFirst, Func<string, bool> matches)
         {
             var favorites = GitProjectSettings.instance;
             var shown = branches.Where(branch => matches(branch.Name)).ToList();
@@ -274,13 +273,14 @@ namespace Upwake.Vetka
                 rows.Add(new Row { Kind = RowKind.Separator });
             }
 
-            var isExpanded = expanded || filtering;
-            var sectionTitle = title;
+            var isExpanded = SessionState.GetBool(sessionKey, expandedByDefault) || filtering;
             rows.Add(new Row
             {
                 Kind = RowKind.Header,
                 Label = (isExpanded ? "▾  " : "▸  ") + title,
-                Activate = filtering ? (Action)null : () => Toggle(sectionTitle)
+                Activate = filtering
+                    ? (Action)null
+                    : () => SessionState.SetBool(sessionKey, !SessionState.GetBool(sessionKey, expandedByDefault))
             });
 
             if (!isExpanded)
@@ -299,22 +299,6 @@ namespace Upwake.Vetka
                     Detail = tracking,
                     Branch = branch
                 });
-            }
-        }
-
-        private static void Toggle(string section)
-        {
-            switch (section)
-            {
-                case "Recent":
-                    RecentExpanded = !RecentExpanded;
-                    break;
-                case "Local":
-                    LocalExpanded = !LocalExpanded;
-                    break;
-                case "Remote":
-                    RemoteExpanded = !RemoteExpanded;
-                    break;
             }
         }
 
@@ -365,15 +349,15 @@ namespace Upwake.Vetka
                 EditorGUI.DrawRect(rect, GitColors.Selection);
             }
 
-            var style = row.Kind == RowKind.Header || row.Branch.IsCurrent ? _boldRowStyle : _rowStyle;
+            var style = row.Kind == RowKind.Header || row.Branch.IsCurrent ? BoldRowStyle : RowStyle;
             var indent = row.Kind == RowKind.Branch ? 26 : 8;
             GUI.Label(new Rect(rect.x + indent, rect.y, rect.width - indent, rect.height), row.Label, style);
 
             if (row.Kind == RowKind.Branch)
             {
                 StarIcon.Draw(starRow, GitProjectSettings.instance.IsFavorite(row.Branch));
-                GUI.Label(new Rect(rect.x, rect.y, rect.width - 20, rect.height), row.Detail ?? "", _detailStyle);
-                GUI.Label(new Rect(rect.xMax - 16, rect.y, 12, rect.height), "›", _detailStyle);
+                GUI.Label(new Rect(rect.x, rect.y, rect.width - 20, rect.height), row.Detail ?? "", DetailStyle);
+                GUI.Label(new Rect(rect.xMax - 16, rect.y, 12, rect.height), "›", DetailStyle);
             }
         }
 
@@ -382,7 +366,7 @@ namespace Upwake.Vetka
             if (row.Kind == RowKind.Branch)
             {
                 var menu = new GenericMenu();
-                BranchActions.AddMenuItems(menu, _git, row.Branch, _branches, Reload);
+                BranchActions.AddMenuItems(menu, _git, row.Branch, _branches);
                 menu.DropDown(new Rect(rect.xMax - 20, rect.y, 20, rect.height));
                 return;
             }
@@ -471,7 +455,7 @@ namespace Upwake.Vetka
                 return;
             }
 
-            var y = RowRect(index).y + _scrollPos.y - HeaderHeight;
+            var y = _offsets[index];
             var visible = _area.height - HeaderHeight;
             if (y < _scrollPos.y)
             {
@@ -481,23 +465,6 @@ namespace Upwake.Vetka
             {
                 _scrollPos.y = y + RowHeight - visible;
             }
-        }
-
-        private void EnsureStyles()
-        {
-            if (_rowStyle != null)
-            {
-                return;
-            }
-
-            _rowStyle = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleLeft };
-            _boldRowStyle = new GUIStyle(_rowStyle) { fontStyle = FontStyle.Bold };
-            _detailStyle = new GUIStyle(EditorStyles.label)
-            {
-                alignment = TextAnchor.MiddleRight,
-                normal = { textColor = Color.gray }
-            };
-            _placeholderStyle = new GUIStyle(EditorStyles.label) { normal = { textColor = Color.gray } };
         }
     }
 }

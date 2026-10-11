@@ -7,25 +7,24 @@ namespace Upwake.Vetka
         [MenuItem("Tools/Git/Update Project", false, 1)]
         public static void UpdateProject()
         {
-            var git = new Git();
-            var updateStrategy = GitSettings.UpdateStrategyValue;
-
-            if (updateStrategy != UpdateStrategy.Ask)
+            var settings = GitProjectSettings.instance;
+            var strategy = (UpdateStrategy)settings.UpdateStrategy;
+            if (settings.UpdateStrategy == UpdateStrategyChoice.Ask)
             {
-                UpdateProject(git, updateStrategy);
-            }
-            else
-            {
-                UpdateProjectStrategyDialog.Show((selectedStrategy, remember) =>
+                var answer = UpdateProjectStrategyDialog.Ask();
+                if (answer == null)
                 {
-                    if (remember)
-                    {
-                        GitSettings.UpdateStrategyValue = selectedStrategy;
-                    }
+                    return;
+                }
 
-                    UpdateProject(git, selectedStrategy);
-                });
+                strategy = answer.Value.Strategy;
+                if (answer.Value.Remember)
+                {
+                    settings.UpdateStrategy = (UpdateStrategyChoice)strategy;
+                }
             }
+
+            UpdateProject(new Git(), strategy);
         }
 
         private static void UpdateProject(Git git, UpdateStrategy strategy)
@@ -34,22 +33,21 @@ namespace Upwake.Vetka
                 BranchActions.IntegrationTitle(strategy, "the incoming changes"),
                 () => git.UpdateProject(strategy),
                 Notification.Show,
-                refreshAssets: true,
-                reportsProgress: true,
-                prepare: UnsavedChanges.SaveOrCancel
+                changesTree: true,
+                reportsProgress: true
             ));
         }
 
         [MenuItem("Tools/Git/Commit...", false, 2)]
         public static void OpenChangesWindow()
         {
-            ChangesWindow.ShowWindow(new Git());
+            ChangesWindow.ShowWindow();
         }
 
         [MenuItem("Tools/Git/Push...", false, 3)]
         public static void OpenPushWindow()
         {
-            PushWindow.ShowWindow(new Git());
+            PushWindow.ShowWindow();
         }
 
         [MenuItem("Tools/Git/Branches...", false, 3)]
@@ -61,7 +59,7 @@ namespace Upwake.Vetka
         [MenuItem("Tools/Git/Stash...", false, 4)]
         public static void OpenStashWindow()
         {
-            StashWindow.ShowWindow(new Git());
+            StashWindow.ShowWindow();
         }
 
         [MenuItem("Tools/Git/Apply Patch...", false, 4)]
@@ -75,13 +73,13 @@ namespace Upwake.Vetka
 
             var git = new Git();
             GitOperations.Run("Git: applying a patch", () => git.ApplyPatch(path), Notification.Show,
-                refreshAssets: true, prepare: UnsavedChanges.SaveOrCancel);
+                changesTree: true);
         }
 
         [MenuItem("Tools/Git/Log...", false, 4)]
         public static void OpenLogWindow()
         {
-            GitLogWindow.ShowWindow(new Git());
+            GitLogWindow.ShowWindow();
         }
 
         [MenuItem("Tools/Git/Settings...", false, 5)]

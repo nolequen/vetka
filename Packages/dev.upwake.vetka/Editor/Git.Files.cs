@@ -10,11 +10,7 @@ namespace Upwake.Vetka
     {
         public GitResult Commit(IEnumerable<string> files, string message, bool amend = false)
         {
-            var paths = (files ?? Enumerable.Empty<string>())
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Distinct()
-                .ToList();
-
+            var paths = Selected(files);
             if (paths.Count == 0 && !amend)
             {
                 return GitResult.Failure("No files selected");
@@ -33,7 +29,6 @@ namespace Upwake.Vetka
                 return refusal.Value;
             }
 
-            string pathspecFile = null;
             string messageFile = null;
             List<string> markedNew = null;
             try
@@ -82,13 +77,11 @@ namespace Upwake.Vetka
 
                         markedNew = targets.Untracked;
                     }
-
-                    pathspecFile = WriteTempFile(LiteralPathspecs(paths));
-                    arguments.Add("--pathspec-from-file");
-                    arguments.Add(pathspecFile);
                 }
 
-                var commit = Run(arguments.ToArray());
+                var commit = paths.Count > 0
+                    ? RunWithPathspecs(null, paths, arguments.ToArray())
+                    : Run(arguments.ToArray());
                 return commit.IsSuccess
                     ? GitResult.Success(CommitSummary(message, amend))
                     : WithNewFilesUnmarked(commit, markedNew);
@@ -99,10 +92,19 @@ namespace Upwake.Vetka
             }
             finally
             {
-                DeleteTempFile(pathspecFile);
                 DeleteTempFile(messageFile);
             }
         }
+
+        internal static List<string> WithOldPaths(IEnumerable<GitFileChange> changes) =>
+            changes.SelectMany(change => string.IsNullOrEmpty(change.OldPath)
+                    ? new[] { change.Path }
+                    : new[] { change.Path, change.OldPath })
+                .Distinct()
+                .ToList();
+
+        private static List<string> Selected(IEnumerable<string> files) =>
+            (files ?? Enumerable.Empty<string>()).Where(path => !string.IsNullOrWhiteSpace(path)).Distinct().ToList();
 
         public GitResult CommitAndPush(IEnumerable<string> files, string message, out bool committed,
             PushTags? tags = null)
@@ -114,7 +116,11 @@ namespace Upwake.Vetka
                 return committed ? GitResult.Done($"{commit.Message}\nNot pushed") : commit;
             }
 
-            var push = PushHead(null, null, tags, out var pushedTags);
+            var destination = PushDestination();
+            var pushedTags = 0;
+            var push = destination.Target.HasValue
+                ? PushTo(destination.Target.Value, null, null, tags, out pushedTags)
+                : GitResult.Failure(destination.Problem);
             if (push.IsCancelled)
             {
                 return GitResult.Cancelled($"{CommitSummary(message, false)}, push cancelled");
@@ -122,9 +128,9 @@ namespace Upwake.Vetka
 
             if (push.IsDone)
             {
-                var pushedTo = PushTarget()?.Name ?? "the remote";
+                var pushedTo = destination.Target?.Name ?? "the remote";
                 var summary = CommitSummary(message, false,
-                    pushedTags > 0 ? $"{pushedTo} with {Counted(pushedTags, "tag")}" : pushedTo);
+                    pushedTags > 0 ? $"{pushedTo} with {Texts.Counted(pushedTags, "tag")}" : pushedTo);
                 return push.IsSuccess ? GitResult.Success(summary) : GitResult.Done($"{summary}\n{push.Message}");
             }
 
@@ -148,7 +154,7 @@ namespace Upwake.Vetka
 
             var count = files.Output.Split('\0').Count(path => path.Trim('\n', '\r').Length > 0);
             var done = pushedTo == null ? "committed" : $"committed and pushed to {pushedTo}";
-            return $"{Counted(count, "file")} {done}: {subject}";
+            return $"{Texts.Counted(count, "file")} {done}: {subject}";
         }
 
         private (GitResult Result, List<string> Untracked, List<string> KeptOnDisk, List<string> Unmerged) CommitTargets(
@@ -161,7 +167,7 @@ namespace Upwake.Vetka
                 return (top, none, none, none);
             }
 
-            var root = Path.GetFullPath(top.Output);
+            var root = top.Output;
             var existing = paths.Where(path => File.Exists(Path.Combine(root, path))).ToList();
             if (existing.Count == 0)
             {
@@ -201,11 +207,11 @@ namespace Upwake.Vetka
                 return unmerged;
             }
 
-            var root = Path.GetFullPath(top.Output);
+            var root = top.Output;
             return unmerged.Where(path => HasConflictMarkers(Path.Combine(root, path))).ToList();
         }
 
-        internal static bool HasConflictMarkers(string file)
+        private static bool HasConflictMarkers(string file)
         {
             if (!File.Exists(file))
             {
@@ -259,7 +265,7 @@ namespace Upwake.Vetka
                 return top;
             }
 
-            var root = Path.GetFullPath(top.Output);
+            var root = top.Output;
             var kept = new HashSet<string>(keptOnDisk);
             var present = new HashSet<string>(paths.Where(path => !kept.Contains(path) &&
                                                                   (File.Exists(Path.Combine(root, path)) ||
@@ -321,7 +327,7 @@ namespace Upwake.Vetka
                                     result.Message);
         }
 
-        public GitResult Rollback(IEnumerable<GitFileChange> changes, bool deleteAdded)
+        public GitResult Rollback(IEnumerable<GitFileChange> changes, bool deleteAdded, int? shownCount = null)
         {
             var selected = (changes ?? Enumerable.Empty<GitFileChange>())
                 .Where(change => !string.IsNullOrWhiteSpace(change.Path))
@@ -332,10 +338,7 @@ namespace Upwake.Vetka
                 return GitResult.Failure("No files selected");
             }
 
-            var paths = selected.Select(change => change.Path)
-                .Concat(selected.Where(change => !string.IsNullOrEmpty(change.OldPath)).Select(change => change.OldPath))
-                .Distinct()
-                .ToList();
+            var paths = WithOldPaths(selected);
             var delete = new HashSet<string>(selected
                 .Where(change => deleteAdded || !string.IsNullOrEmpty(change.OldPath))
                 .Select(change => change.Path));
@@ -363,7 +366,8 @@ namespace Upwake.Vetka
             var restore = paths.Where(path => !untracked.Contains(path) && !unstage.Contains(path) &&
                                               !unmerged.Contains(path)).ToList();
             var remove = paths.Where(path => untracked.Contains(path) && delete.Contains(path)).ToList();
-            var rolledBack = $"{Counted(selected.Select(change => change.Path).Distinct().Count(), "file")} rolled back";
+            var rolledBack =
+                $"{Texts.Counted(shownCount ?? selected.Select(change => change.Path).Distinct().Count(), "file")} rolled back";
 
             try
             {
@@ -407,24 +411,8 @@ namespace Upwake.Vetka
 
         private GitResult? Restore(string source, List<string> paths, params string[] targets)
         {
-            if (paths.Count == 0)
-            {
-                return null;
-            }
-
-            var pathspecFile = WriteTempFile(LiteralPathspecs(paths));
-            try
-            {
-                var arguments = new[] { "restore", "--source=" + source }.Concat(targets)
-                    .Append("--pathspec-from-file=" + pathspecFile)
-                    .ToArray();
-                var result = Run(arguments);
-                return result.IsSuccess || Matches(source, paths, targets) ? (GitResult?)null : result;
-            }
-            finally
-            {
-                DeleteTempFile(pathspecFile);
-            }
+            var result = RunWithPathspecs(null, paths, new[] { "restore", "--source=" + source }.Concat(targets).ToArray());
+            return result.IsSuccess || Matches(source, paths, targets) ? (GitResult?)null : result;
         }
 
         private bool Matches(string source, List<string> paths, string[] targets)
@@ -433,18 +421,18 @@ namespace Upwake.Vetka
             var checks = new List<string[]>();
             if (targets.Contains("--staged"))
             {
-                checks.Add(new[] { "diff", "--cached", "--name-only", "-z", "--no-renames", source });
+                checks.Add(new[] { "--cached", source });
             }
 
             if (targets.Contains("--worktree"))
             {
-                checks.Add(new[] { "diff", "--name-only", "-z", "--no-renames", source });
+                checks.Add(new[] { source });
             }
 
             foreach (var check in checks)
             {
-                var diff = Run(check);
-                if (!diff.IsSuccess || NulSeparated(diff.Output).Any(wanted.Contains))
+                var changed = ChangedPaths(check);
+                if (changed == null || changed.Any(wanted.Contains))
                 {
                     return false;
                 }
@@ -484,39 +472,13 @@ namespace Upwake.Vetka
 
         public GitResult Add(IEnumerable<string> files)
         {
-            var paths = (files ?? Enumerable.Empty<string>())
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Distinct()
-                .ToList();
-
-            if (paths.Count == 0)
-            {
-                return GitResult.Failure("No files selected");
-            }
-
-            string pathspecFile = null;
-            try
-            {
-                pathspecFile = WriteTempFile(LiteralPathspecs(paths));
-                return Run("add", "--pathspec-from-file", pathspecFile);
-            }
-            catch (Exception exception)
-            {
-                return GitResult.Failure($"Adding files failed: {exception.Message}");
-            }
-            finally
-            {
-                DeleteTempFile(pathspecFile);
-            }
+            var paths = Selected(files);
+            return paths.Count == 0 ? GitResult.Failure("No files selected") : RunWithPathspecs(null, paths, "add");
         }
 
         public GitResult CreatePatch(IEnumerable<string> files, string patchPath)
         {
-            var paths = (files ?? Enumerable.Empty<string>())
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Distinct()
-                .ToList();
-
+            var paths = Selected(files);
             if (paths.Count == 0)
             {
                 return GitResult.Failure("No files selected");
@@ -524,7 +486,6 @@ namespace Upwake.Vetka
 
             var indexFile = Path.Combine(Path.GetTempPath(), $"Vetka-{Guid.NewGuid():N}.index");
             var environment = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = indexFile };
-            string pathspecFile = null;
             try
             {
                 var hasHead = HasHead();
@@ -534,8 +495,7 @@ namespace Upwake.Vetka
                     return readTree;
                 }
 
-                pathspecFile = WriteTempFile(LiteralPathspecs(paths));
-                var add = RunWithEnvironment(environment, "add", "--pathspec-from-file", pathspecFile);
+                var add = RunWithPathspecs(environment, paths, "add");
                 if (!add.IsSuccess)
                 {
                     return add;
@@ -562,30 +522,25 @@ namespace Upwake.Vetka
             }
             finally
             {
-                DeleteTempFile(pathspecFile);
                 DeleteTempFile(indexFile);
             }
         }
 
-        public GitResult FileDiff(string path, bool untracked, string oldPath = null)
+        public GitResult FileDiff(string path, string oldPath = null)
         {
             if (!string.IsNullOrEmpty(oldPath))
             {
-                var arguments = new[]
-                {
-                    "diff", "HEAD", "--find-renames", "--no-color", "--no-ext-diff", "--",
-                    ":(top,literal)" + oldPath, ":(top,literal)" + path
-                };
-                var moved = WithTemporaryIndex(environment =>
-                    RunWithPathspecs(environment, new[] { path }, "add", "--intent-to-add").IsSuccess
-                        ? (GitResult?)RunWithEnvironment(environment, arguments)
-                        : null);
-                return moved ?? GitResult.Failure("Cannot read the diff of the moved file");
+                return CompareWithLocal("HEAD", oldPath, path);
             }
 
-            if (!untracked && HasHead())
+            if (HasHead())
             {
-                return Run("diff", "HEAD", "--no-color", "--no-ext-diff", "--", ":(top,literal)" + path);
+                var tracked = Run("diff", "HEAD", "--no-color", "--no-ext-diff", "--", ":(top,literal)" + path);
+                if (!tracked.IsSuccess || tracked.Output.Length > 0 ||
+                    Run("ls-files", "--error-unmatch", "--", ":(top,literal)" + path).IsSuccess)
+                {
+                    return tracked;
+                }
             }
 
             var top = TopLevel();
@@ -612,7 +567,7 @@ namespace Upwake.Vetka
             var arguments = new[] { "diff", commit, "--find-renames", "--no-color", "--no-ext-diff" }
                 .Concat(PathFilter(paths))
                 .ToArray();
-            var exists = File.Exists(Path.Combine(Path.GetFullPath(top.Output), localPath));
+            var exists = File.Exists(Path.Combine(top.Output, localPath));
             if (!exists && !moved)
             {
                 return Run(arguments);
@@ -653,7 +608,7 @@ namespace Upwake.Vetka
                 return top;
             }
 
-            var root = Path.GetFullPath(top.Output);
+            var root = top.Output;
             if (Directory.Exists(Path.Combine(root, localPath)))
             {
                 return GitResult.Failure($"Cannot write {localPath}: a folder with that name is in the way");
@@ -702,7 +657,7 @@ namespace Upwake.Vetka
                 return GitResult.Failure($"{unchanged}\n{stats.Message}");
             }
 
-            using var backup = new FileBackup(Path.GetFullPath(top.Output));
+            using var backup = new FileBackup(top.Output);
             var saved = backup.Save(PatchedPaths(stats.Output, patchPath));
             if (saved != null)
             {
@@ -746,7 +701,7 @@ namespace Upwake.Vetka
             return paths.Distinct().ToList();
         }
 
-        internal static string Unquoted(string path)
+        private static string Unquoted(string path)
         {
             if (path.Length < 2 || path[0] != '"' || path[path.Length - 1] != '"')
             {
@@ -950,7 +905,7 @@ namespace Upwake.Vetka
                 return;
             }
 
-            var root = Path.GetFullPath(top.Output);
+            var root = top.Output;
             var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var path in paths)
             {

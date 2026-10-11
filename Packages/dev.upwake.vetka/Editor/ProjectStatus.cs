@@ -43,15 +43,13 @@ namespace Upwake.Vetka
         private static bool _loading;
         private static volatile bool _started;
         private static bool _refreshAgain;
-        private static GUIStyle _letterStyle;
-
-        private static GUIStyle LetterStyle => _letterStyle ??= new GUIStyle(EditorStyles.miniBoldLabel)
+        private static readonly SkinStyle LetterStyle = new SkinStyle(() => new GUIStyle(EditorStyles.miniBoldLabel)
         {
             alignment = TextAnchor.MiddleCenter,
             fontSize = 9,
             padding = new RectOffset(0, 0, 0, 0),
             margin = new RectOffset(0, 0, 0, 0)
-        };
+        });
 
         static ProjectStatus()
         {
@@ -234,7 +232,6 @@ namespace Upwake.Vetka
             return status switch
             {
                 GitStatus.Added => "A",
-                GitStatus.Copied => "A",
                 GitStatus.Untracked => "U",
                 GitStatus.Renamed => "R",
                 GitStatus.Unmerged => "!",

@@ -7,72 +7,74 @@ namespace Upwake.Vetka
 {
     internal static class BranchActions
     {
-        public static void AddMenuItems(GenericMenu menu, Git git, GitBranch branch, List<GitBranch> branches,
-            Action onCompleted)
+        public static void AddMenuItems(GenericMenu menu, Git git, GitBranch branch, List<GitBranch> branches)
         {
             var currentName = branches.Find(item => item.IsCurrent).Name;
-            var shownName = MenuText(branch.Name);
-            var shownCurrent = MenuText(currentName ?? "HEAD");
+            var shownName = Texts.MenuLabel(branch.Name);
+            var shownCurrent = Texts.MenuLabel(currentName ?? "HEAD");
 
-            AddItem(menu, "Checkout", !branch.IsCurrent, () => Checkout(git, branch, onCompleted));
-            AddItem(menu, $"New Branch from '{shownName}'...", true,
-                () => NewBranch(git, branch.Name, branch.Ref, onCompleted));
-            AddItem(menu, $"Compare with '{shownCurrent}'", !branch.IsCurrent,
-                () => CompareBranchWindow.ShowWindow(git, branch.Ref, branch.Name));
+            Menus.Add(menu, "Checkout", !branch.IsCurrent, () => Checkout(git, branch));
+            Menus.Add(menu, $"New Branch from '{shownName}'...", true,
+                () => NewBranch(git, branch.Name, branch.Ref));
+            Menus.Add(menu, $"Compare with '{shownCurrent}'", !branch.IsCurrent,
+                () => CompareBranchWindow.ShowWindow(branch.Ref, branch.Name));
             menu.AddSeparator("");
 
             var canIntegrate = currentName != null && !branch.IsCurrent;
-            AddItem(menu, $"Merge '{shownName}' into '{shownCurrent}'", canIntegrate,
-                () => Integrate(git, UpdateStrategy.Merge, branch, onCompleted));
-            AddItem(menu, $"Rebase '{shownCurrent}' onto '{shownName}'", canIntegrate,
-                () => Integrate(git, UpdateStrategy.Rebase, branch, onCompleted));
+            Menus.Add(menu, $"Merge '{shownName}' into '{shownCurrent}'", canIntegrate,
+                () => Integrate(git, UpdateStrategy.Merge, branch));
+            Menus.Add(menu, $"Rebase '{shownCurrent}' onto '{shownName}'", canIntegrate,
+                () => Integrate(git, UpdateStrategy.Rebase, branch));
 
             if (!branch.IsRemote)
             {
                 menu.AddSeparator("");
-                AddItem(menu, "Delete", !branch.IsCurrent, () => Delete(git, branch.Name, onCompleted));
+                Menus.Add(menu, "Delete", !branch.IsCurrent, () => Delete(git, branch.Name));
             }
         }
 
-        public static void Checkout(Git git, GitBranch branch, Action onCompleted)
+        public static void Checkout(Git git, GitBranch branch)
         {
             if (branch.IsRemote)
             {
-                Run($"Git: checking out {branch.Name}", () => git.CheckoutRemote(branch.Ref), onCompleted);
+                Run($"Git: checking out {branch.Name}", () => git.CheckoutRemote(branch.Ref));
             }
             else
             {
-                Run($"Git: checking out {branch.Name}", () => git.Checkout(branch.Name), onCompleted);
+                Run($"Git: checking out {branch.Name}", () => git.Checkout(branch.Name));
             }
         }
 
-        public static void NewBranch(Git git, string startName, string startRef, Action onCompleted)
+        public static void NewBranch(Git git, string startName, string startRef)
         {
-            NewBranchWindow.Show(startName, (name, checkout) =>
+            var answer = NewBranchWindow.Ask(startName);
+            if (answer == null)
             {
-                if (checkout)
-                {
-                    Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, true, startName), onCompleted);
-                }
-                else
-                {
-                    GitOperations.Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, false, startName),
-                        result => Complete(result, onCompleted));
-                }
-            });
+                return;
+            }
+
+            var (name, checkout) = answer.Value;
+            if (checkout)
+            {
+                Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, true, startName));
+            }
+            else
+            {
+                GitOperations.Run($"Git: creating {name}", () => git.CreateBranch(name, startRef, false, startName),
+                    Notification.Show);
+            }
         }
 
-        public static void Integrate(Git git, UpdateStrategy strategy, GitBranch branch, Action onCompleted)
+        public static void Integrate(Git git, UpdateStrategy strategy, GitBranch branch)
         {
             GitIdentityWindow.Ensure(git, () =>
-                Run(IntegrationTitle(strategy, branch.Name), () => git.Integrate(strategy, branch.Ref, branch.Name),
-                    onCompleted));
+                Run(IntegrationTitle(strategy, branch.Name), () => git.Integrate(strategy, branch.Ref, branch.Name)));
         }
 
         public static string IntegrationTitle(UpdateStrategy strategy, string target) =>
             strategy == UpdateStrategy.Rebase ? $"Git: rebasing onto {target}" : $"Git: merging {target}";
 
-        public static void Delete(Git git, string name, Action onCompleted)
+        public static void Delete(Git git, string name)
         {
             if (!EditorUtility.DisplayDialog("Delete branch", $"Delete branch '{name}'?", "Delete", "Cancel"))
             {
@@ -83,7 +85,7 @@ namespace Upwake.Vetka
             {
                 if (!result.IsRejected)
                 {
-                    Complete(result, onCompleted);
+                    Notification.Show(result);
                     return;
                 }
 
@@ -96,35 +98,13 @@ namespace Upwake.Vetka
                 }
 
                 GitOperations.Run($"Git: deleting {name}", () => git.DeleteBranch(name, true),
-                    forced => Complete(forced, onCompleted));
+                    Notification.Show);
             });
         }
 
-        private static void Run(string title, Func<GitResult> work, Action onCompleted)
+        private static void Run(string title, Func<GitResult> work)
         {
-            GitOperations.Run(title, work, result => Complete(result, onCompleted), refreshAssets: true,
-                prepare: UnsavedChanges.SaveOrCancel);
+            GitOperations.Run(title, work, Notification.Show, changesTree: true);
         }
-
-        private static void Complete(GitResult result, Action onCompleted)
-        {
-            BranchTitle.Refresh();
-            onCompleted?.Invoke();
-            Notification.Show(result);
-        }
-
-        private static void AddItem(GenericMenu menu, string title, bool enabled, GenericMenu.MenuFunction action)
-        {
-            if (enabled)
-            {
-                menu.AddItem(new GUIContent(title), false, () => EditorApplication.delayCall += () => action());
-            }
-            else
-            {
-                menu.AddDisabledItem(new GUIContent(title));
-            }
-        }
-
-        private static string MenuText(string name) => name.Replace('/', '\u2215');
     }
 }

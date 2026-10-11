@@ -28,7 +28,10 @@ namespace Upwake.Vetka
 
         private void OnFocus()
         {
-            _view?.Reload();
+            if (_view != null && _view.IsStale)
+            {
+                _view.Reload();
+            }
         }
 
         private void OnGUI()

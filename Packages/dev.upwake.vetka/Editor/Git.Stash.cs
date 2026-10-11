@@ -18,8 +18,7 @@ namespace Upwake.Vetka
                 return (result, new List<GitStash>());
             }
 
-            return (result, result.Output
-                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            return (result, Lines(result.Output)
                 .Select(line => line.Split(new[] { LogFieldSeparator }, StringSplitOptions.None))
                 .Where(fields => fields.Length == 4)
                 .Select(fields => new GitStash(fields[0],
@@ -103,7 +102,7 @@ namespace Upwake.Vetka
                 return GitResult.Failure($"Applying {reference} is not possible, the local changes cannot be read");
             }
 
-            var root = Path.GetFullPath(top.Output);
+            var root = top.Output;
             var created = StashUntrackedFiles(stash.Hash)
                 .Where(path => !File.Exists(Path.Combine(root, path)))
                 .ToList();
@@ -165,8 +164,8 @@ namespace Upwake.Vetka
         private bool HasStagedPart(string stash)
         {
             var trees = Run("rev-parse", $"{stash}^1^{{tree}}", $"{stash}^2^{{tree}}");
-            var lines = trees.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            return trees.IsSuccess && lines.Length == 2 && lines[0] != lines[1];
+            var lines = Lines(trees.Output);
+            return trees.IsSuccess && lines.Count == 2 && lines[0] != lines[1];
         }
 
         private GitResult StashNotMade(GitResult push, string own, bool includeUntracked, DateTime pushed,
@@ -216,7 +215,7 @@ namespace Upwake.Vetka
                 return restored;
             }
 
-            var root = Path.GetFullPath(top.Output);
+            var root = top.Output;
             DeleteCreatedFiles(NulSeparated(removed.Output)
                 .Where(path => File.Exists(Path.Combine(root, path)))
                 .ToList());
@@ -266,56 +265,26 @@ namespace Upwake.Vetka
                 return false;
             }
 
-            var now = StashCreate();
-            var expected = Trees(snapshot);
-            return now.IsSuccess && expected != null && expected == Trees(now.Output);
+            return SameTrees(snapshot, StashCreate());
         }
 
         private List<string> StashPaths(string reference)
         {
-            var worktree = Run("diff", "--name-only", "-z", "--no-renames", $"{reference}^1", reference);
-            var index = Run("diff", "--name-only", "-z", "--no-renames", $"{reference}^1", $"{reference}^2");
-            return worktree.IsSuccess && index.IsSuccess
-                ? (worktree.Output + "\0" + index.Output).Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries)
-                .Distinct()
-                .ToList()
-                : null;
+            var worktree = ChangedPaths($"{reference}^1", reference);
+            var index = ChangedPaths($"{reference}^1", $"{reference}^2");
+            return worktree != null && index != null ? worktree.Concat(index).Distinct().ToList() : null;
         }
 
         private List<string> RenamedSince(string stash, IEnumerable<string> paths)
         {
             var wanted = new HashSet<string>(paths, StringComparer.Ordinal);
             var renames = Run("diff", "--name-status", "-z", "--find-renames", $"{stash}^1", "HEAD");
-            var found = new List<string>();
-            if (!renames.IsSuccess)
-            {
-                return found;
-            }
-
-            var tokens = renames.Output.Split('\0');
-            for (var i = 0; i + 1 < tokens.Length; i++)
-            {
-                var status = tokens[i];
-                if (status.Length == 0)
-                {
-                    continue;
-                }
-
-                if (status[0] != 'R' && status[0] != 'C')
-                {
-                    i++;
-                    continue;
-                }
-
-                if (i + 2 < tokens.Length && status[0] == 'R' && wanted.Contains(tokens[i + 1]))
-                {
-                    found.Add(tokens[i + 2]);
-                }
-
-                i += 2;
-            }
-
-            return found;
+            return renames.IsSuccess
+                ? NameStatus(renames.Output.Split('\0'))
+                    .Where(entry => entry.Status[0] == 'R' && entry.OldPath != null && wanted.Contains(entry.OldPath))
+                    .Select(entry => entry.Path)
+                    .ToList()
+                : new List<string>();
         }
 
         public GitResult DropStash(GitStash stash)
@@ -339,9 +308,7 @@ namespace Upwake.Vetka
                 return new List<string>();
             }
 
-            return Run("ls-tree", "-r", "-z", "--name-only", "--full-tree", parents[2]).Output
-                .Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries)
-                .ToList();
+            return NulSeparated(Run("ls-tree", "-r", "-z", "--name-only", "--full-tree", parents[2]).Output);
         }
 
         private GitResult RollbackStash(string reference, string stash, string message, GitResult apply,

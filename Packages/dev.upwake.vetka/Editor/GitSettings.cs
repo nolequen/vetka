@@ -6,7 +6,12 @@ namespace Upwake.Vetka
     [InitializeOnLoad]
     internal static class GitSettings
     {
-        private const string Prefix = "Vetka_";
+        private const string GitPathKey = "Vetka_GitPath";
+        private const string VerboseLoggingKey = "Vetka_VerboseLogging";
+        private const string ShowBranchInTitleKey = "Vetka_ShowBranchInTitle";
+        private const string ShowStatusInProjectKey = "Vetka_ShowStatusInProject";
+        private const string PushTagsKey = "Vetka_PushTags";
+        private const string PushTagsModeKey = "Vetka_PushTagsMode";
 
         private static volatile string _gitPath;
         private static volatile bool _verboseLogging;
@@ -17,12 +22,12 @@ namespace Upwake.Vetka
 
         static GitSettings()
         {
-            _gitPath = EditorPrefs.GetString(Prefix + "GitPath", "");
-            _verboseLogging = EditorPrefs.GetBool(Prefix + "VerboseLogging", false);
-            _showBranchInTitle = EditorPrefs.GetBool(Prefix + "ShowBranchInTitle", true);
-            _showStatusInProject = EditorPrefs.GetBool(Prefix + "ShowStatusInProject", true);
-            _pushTags = EditorPrefs.GetBool(Prefix + "PushTags", false);
-            _pushTagsMode = EditorPrefs.GetInt(Prefix + "PushTagsMode", 0) == (int)PushTags.All
+            _gitPath = EditorPrefs.GetString(GitPathKey, "");
+            _verboseLogging = EditorPrefs.GetBool(VerboseLoggingKey, false);
+            _showBranchInTitle = EditorPrefs.GetBool(ShowBranchInTitleKey, true);
+            _showStatusInProject = EditorPrefs.GetBool(ShowStatusInProjectKey, true);
+            _pushTags = EditorPrefs.GetBool(PushTagsKey, false);
+            _pushTagsMode = EditorPrefs.GetInt(PushTagsModeKey, 0) == (int)PushTags.All
                 ? PushTags.All
                 : PushTags.CurrentBranch;
 
@@ -50,71 +55,47 @@ namespace Upwake.Vetka
         public static string GitPath
         {
             get => _gitPath;
-            set
-            {
-                _gitPath = value ?? "";
-                EditorPrefs.SetString(Prefix + "GitPath", _gitPath);
-            }
+            set => EditorPrefs.SetString(GitPathKey, _gitPath = value ?? "");
         }
 
         public static bool VerboseLogging
         {
             get => _verboseLogging;
-            set
-            {
-                _verboseLogging = value;
-                EditorPrefs.SetBool(Prefix + "VerboseLogging", value);
-            }
+            set => EditorPrefs.SetBool(VerboseLoggingKey, _verboseLogging = value);
         }
 
         public static bool ShowBranchInTitle
         {
             get => _showBranchInTitle;
-            set
-            {
-                _showBranchInTitle = value;
-                EditorPrefs.SetBool(Prefix + "ShowBranchInTitle", value);
-            }
+            set => EditorPrefs.SetBool(ShowBranchInTitleKey, _showBranchInTitle = value);
         }
 
         public static bool ShowStatusInProject
         {
             get => _showStatusInProject;
-            set
-            {
-                _showStatusInProject = value;
-                EditorPrefs.SetBool(Prefix + "ShowStatusInProject", value);
-            }
+            set => EditorPrefs.SetBool(ShowStatusInProjectKey, _showStatusInProject = value);
         }
 
         public static bool PushTagsEnabled
         {
             get => _pushTags;
-            set
-            {
-                _pushTags = value;
-                EditorPrefs.SetBool(Prefix + "PushTags", value);
-            }
+            set => EditorPrefs.SetBool(PushTagsKey, _pushTags = value);
         }
 
         public static PushTags PushTagsMode
         {
             get => _pushTagsMode;
-            set
-            {
-                _pushTagsMode = value;
-                EditorPrefs.SetInt(Prefix + "PushTagsMode", (int)value);
-            }
-        }
-
-        public static UpdateStrategy UpdateStrategyValue
-        {
-            get => GitProjectSettings.instance.UpdateStrategy;
-            set => GitProjectSettings.instance.UpdateStrategy = value;
+            set => EditorPrefs.SetInt(PushTagsModeKey, (int)(_pushTagsMode = value));
         }
     }
 
     internal enum UpdateStrategy
+    {
+        Merge,
+        Rebase
+    }
+
+    internal enum UpdateStrategyChoice
     {
         Merge,
         Rebase,

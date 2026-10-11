@@ -1,4 +1,3 @@
-using System;
 using UnityEditor;
 using UnityEngine;
 
@@ -9,8 +8,7 @@ namespace Upwake.Vetka
         private string _question;
         private int _added;
         private bool _deleteAdded;
-        private Action<bool> _onConfirm;
-        [NonSerialized] private bool _closing;
+        private bool? _answer;
 
         private static GUIStyle _paddingStyle;
 
@@ -19,36 +17,19 @@ namespace Upwake.Vetka
             padding = new RectOffset(10, 10, 8, 10)
         };
 
-        public static void Show(string question, int added, Action<bool> onConfirm)
+        public static bool? Ask(string question, int added)
         {
             var window = CreateInstance<RollbackDialog>();
-            window.titleContent = new GUIContent("Rollback");
             window._question = question;
             window._added = added;
-            window._onConfirm = onConfirm;
-
-            var size = new Vector2(380, added > 0 ? 112 : 92);
-            var main = EditorGUIUtility.GetMainWindowPosition();
-            window.position = new Rect(main.center - size / 2, size);
-            window.minSize = size;
-            window.maxSize = size;
-
-            window.ShowUtility();
-            window.Focus();
+            return ModalDialog.Show(window, "Rollback", new Vector2(380, added > 0 ? 112 : 92)) ? window._answer : null;
         }
 
         private void OnGUI()
         {
-            if (_onConfirm == null)
-            {
-                CloseLater();
-                return;
-            }
-
             var current = Event.current;
-            var submit = current.type == EventType.KeyDown &&
-                         (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter);
-            var cancel = current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape;
+            var submit = ModalDialog.Submitted(current);
+            var cancel = ModalDialog.Cancelled(current);
 
             using (new EditorGUILayout.VerticalScope(PaddingStyle))
             {
@@ -71,37 +52,16 @@ namespace Upwake.Vetka
 
                     if (GUILayout.Button("Rollback", GUILayout.Width(90)) || submit)
                     {
-                        var callback = _onConfirm;
-                        var deleteAdded = _deleteAdded;
-                        _onConfirm = null;
-                        EditorApplication.delayCall += () => callback(deleteAdded);
-                        CloseLater();
+                        _answer = _deleteAdded;
+                        ModalDialog.Close(this);
                     }
 
                     if (GUILayout.Button("Cancel", GUILayout.Width(80)) || cancel)
                     {
-                        _onConfirm = null;
-                        CloseLater();
+                        ModalDialog.Close(this);
                     }
                 }
             }
-        }
-
-        private void CloseLater()
-        {
-            if (_closing)
-            {
-                return;
-            }
-
-            _closing = true;
-            EditorApplication.delayCall += () =>
-            {
-                if (this != null)
-                {
-                    Close();
-                }
-            };
         }
     }
 }

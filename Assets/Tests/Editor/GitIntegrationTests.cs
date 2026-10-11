@@ -110,6 +110,16 @@ namespace Upwake.Vetka.Tests
             "  defaultReferences: []\n  executionOrder: 0\n  icon: {{instanceID: 0}}\n  userData: \n" +
             "  assetBundleName: \n  assetBundleVariant: \n";
 
+        private static void CommitStuckCrlfFile(TestRepository repo, string message)
+        {
+            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+            repo.CommitAll(message);
+            repo.Write(".gitattributes", "*.txt text eol=lf\n");
+            repo.RunGit("add", ".gitattributes");
+            repo.RunGit("commit", "-q", "-m", "attributes");
+            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+        }
+
         private static string Lines(string prefix, int count) =>
             string.Concat(Enumerable.Range(1, count).Select(i => $"{prefix} line {i}\n"));
 
@@ -135,10 +145,16 @@ namespace Upwake.Vetka.Tests
         private static string Describe(GitFileChange change) =>
             change.OldPath == null ? $"{change.Status} {change.Path}" : $"{change.Status} {change.OldPath} -> {change.Path}";
 
-        [Test]
-        public void WorkingTreeChanges_ShowsMovesAsOneEntryAndLeavesTheIndexAlone()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void WorkingTreeChanges_ShowsMovesAsOneEntryAndLeavesTheIndexAlone(bool renamesOff)
         {
             using var repo = CreateMovedProject();
+            if (renamesOff)
+            {
+                repo.RunGit("config", "status.renames", "false");
+            }
+
             var before = repo.Snapshot();
 
             var changes = repo.Git.WorkingTreeChanges().Changes;
@@ -152,24 +168,6 @@ namespace Upwake.Vetka.Tests
                 "Renamed Assets/staged.txt -> Assets/staged2.txt"
             }, changes.Select(Describe));
             Assert.AreEqual(before, repo.Snapshot());
-        }
-
-        [Test]
-        public void WorkingTreeChanges_ShowsMovesEvenWhenStatusRenamesAreOff()
-        {
-            using var repo = CreateMovedProject();
-            repo.RunGit("config", "status.renames", "false");
-
-            var changes = repo.Git.WorkingTreeChanges().Changes;
-
-            CollectionAssert.AreEqual(new[]
-            {
-                "Renamed Assets/Old/a.cs -> Assets/New/a.cs",
-                "Renamed Assets/Old/a.cs.meta -> Assets/New/a.cs.meta",
-                "Untracked Assets/New/b2.cs",
-                "Deleted Assets/Old/b.cs",
-                "Renamed Assets/staged.txt -> Assets/staged2.txt"
-            }, changes.Select(Describe));
         }
 
         private static string Script(string name) =>
@@ -323,7 +321,7 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = CreateMovedProject();
 
-            var diff = repo.Git.FileDiff("Assets/New/b2.cs", true, "Assets/Old/b.cs");
+            var diff = repo.Git.FileDiff("Assets/New/b2.cs", "Assets/Old/b.cs");
 
             Assert.IsTrue(diff.IsSuccess, diff.Message);
             StringAssert.Contains("rename from Assets/Old/b.cs", diff.Output);
@@ -388,6 +386,22 @@ namespace Upwake.Vetka.Tests
             var changes = repo.Git.WorkingTreeChanges().Changes;
 
             CollectionAssert.AreEqual(new[] { "Deleted Assets/added.txt", "Deleted Assets/modified.txt" },
+                changes.Select(Describe));
+        }
+
+        [Test]
+        public void WorkingTreeChanges_ListsAStagedRenameRemovedFromDiskAsTwoDeletions()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("Assets/top.txt", "t\n");
+            repo.CommitAll("base");
+
+            repo.RunGit("mv", "Assets/top.txt", "Assets/moved.txt");
+            repo.Delete("Assets/moved.txt");
+
+            var changes = repo.Git.WorkingTreeChanges().Changes;
+
+            CollectionAssert.AreEqual(new[] { "Deleted Assets/moved.txt", "Deleted Assets/top.txt" },
                 changes.Select(Describe));
         }
 
@@ -850,12 +864,10 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_CommittedConflict_RollsBack(UpdateStrategy strategy)
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
 
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
+            upstream.PushChange("f.txt", "theirs");
 
             local.Write("f.txt", "mine\n");
             local.CommitAll("mine");
@@ -874,7 +886,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_LocalChangesConflictWithIncoming_RollsBackEverything(UpdateStrategy strategy)
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
 
             upstream.Write("f.txt", "theirs\n");
@@ -900,12 +912,10 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_WithoutConflicts_KeepsLocalChanges()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
 
-            upstream.Write("f.txt", "theirs\n");
-            upstream.CommitAll("theirs");
-            upstream.RunGit("push", "-q");
+            upstream.PushChange("f.txt", "theirs");
 
             local.Write("o.txt", "local change\n");
 
@@ -923,7 +933,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_ListsWhatTheFetchChangedOnEveryBranch()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             foreach (var branch in new[] { "back", "old", "rewritten", "ui" })
             {
                 upstream.RunGit("switch", "-q", "-c", branch, "main");
@@ -971,7 +981,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_WhenOnlyAnotherBranchChanged_SaysUpToDateAndNamesThatBranch()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
 
             Assert.AreEqual("Already up to date with origin/main", local.Git.UpdateProject(UpdateStrategy.Merge).Message);
@@ -986,7 +996,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_WithManyChangedBranches_ListsOnlyTheFirstOnes()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             upstream.RunGit("push", "-q", "origin", "main:a", "main:b", "main:c");
 
@@ -1003,7 +1013,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_ListsTagsTheFetchMovedOrDeleted()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             upstream.RunGit("tag", "moved");
             upstream.RunGit("tag", "gone");
             upstream.RunGit("push", "-q", "origin", "moved", "gone");
@@ -1032,7 +1042,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_ListsTheUpstreamFirstWhenALocalBranchHasItsShortName()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             upstream.RunGit("push", "-q", "origin", "main:back");
             using var local = remote.Clone("local");
             local.RunGit("branch", "origin/main");
@@ -1162,7 +1172,7 @@ namespace Upwake.Vetka.Tests
             repo.RunGit("switch", "-q", "-c", "фича/x");
             repo.RunGit("switch", "-q", "main");
 
-            var branches = repo.Git.Branches();
+            var branches = repo.Git.ReadBranches().Branches;
 
             CollectionAssert.AreEquivalent(new[] { "main", "feature", "фича/x" }, branches.Select(b => b.Name));
             Assert.AreEqual("main", branches.Single(b => b.IsCurrent).Name);
@@ -1190,8 +1200,8 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("main change");
             repo.RunGit("merge", "-q", "--no-ff", "--no-edit", "feature");
 
-            var rootFiles = repo.Git.CommitFiles(root);
-            var mergeFiles = repo.Git.CommitFiles(repo.Head);
+            var rootFiles = repo.Git.CommitFiles(root).Files;
+            var mergeFiles = repo.Git.CommitFiles(repo.Head).Files;
 
             CollectionAssert.AreEqual(new[] { "a.txt", "Р ф.txt" }, rootFiles.Select(f => f.Path));
             Assert.IsTrue(rootFiles.All(f => f.Status == GitStatus.Added));
@@ -1207,8 +1217,8 @@ namespace Upwake.Vetka.Tests
             repo.Write("a.txt", "b\n");
             repo.Write("new.txt", "n\n");
 
-            var tracked = repo.Git.FileDiff("a.txt", false);
-            var untracked = repo.Git.FileDiff("new.txt", true);
+            var tracked = repo.Git.FileDiff("a.txt");
+            var untracked = repo.Git.FileDiff("new.txt");
 
             Assert.IsTrue(tracked.IsSuccess, tracked.Message);
             StringAssert.Contains("-a", tracked.Output);
@@ -1693,7 +1703,7 @@ namespace Upwake.Vetka.Tests
 
             Assert.IsTrue(commit.IsSuccess, commit.Message);
             StringAssert.DoesNotContain("encoding", repo.RunGit("cat-file", "-p", "HEAD"));
-            Assert.AreEqual("Второй коммит", repo.Git.Log()[0].Subject);
+            Assert.AreEqual("Второй коммит", repo.Git.ReadLogPage(null, 0, 50).Commits[0].Subject);
             Assert.AreEqual("Второй коммит", repo.Git.LastCommitMessage());
         }
 
@@ -1787,7 +1797,7 @@ namespace Upwake.Vetka.Tests
             repo.RunGit("add", "-A");
             var patch = Path.Combine(repo.BaseDirectory, "first.patch");
 
-            var diff = repo.Git.FileDiff("Assets/a b.txt", false);
+            var diff = repo.Git.FileDiff("Assets/a b.txt");
             var created = repo.Git.CreatePatch(new[] { "Assets/a b.txt" }, patch);
 
             Assert.IsTrue(diff.IsSuccess, diff.Message);
@@ -1803,7 +1813,7 @@ namespace Upwake.Vetka.Tests
             repo.Write("a.txt", "a\n");
             repo.CommitAll("base");
 
-            var diff = repo.Git.FileDiff("gone.txt", true);
+            var diff = repo.Git.FileDiff("gone.txt");
 
             Assert.IsFalse(diff.IsSuccess);
         }
@@ -1977,12 +1987,7 @@ namespace Upwake.Vetka.Tests
         public void Switch_WithAFileThatStaysModifiedAfterStashing_ChangesNothing(bool merge)
         {
             using var repo = CreateDivergedBranches();
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
-            repo.CommitAll("crlf");
-            repo.Write(".gitattributes", "*.txt text eol=lf\n");
-            repo.RunGit("add", ".gitattributes");
-            repo.RunGit("commit", "-q", "-m", "attributes");
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+            CommitStuckCrlfFile(repo, "crlf");
             repo.Write("f.txt", "local\n");
             var before = repo.Snapshot();
             var git = repo.Git;
@@ -2001,13 +2006,8 @@ namespace Upwake.Vetka.Tests
         public void CreateBranch_AtTheCurrentCommit_KeepsAFileThatStaysModifiedAfterStashing()
         {
             using var repo = TestRepository.Create();
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
             repo.Write("f.txt", "base\n");
-            repo.CommitAll("base");
-            repo.Write(".gitattributes", "*.txt text eol=lf\n");
-            repo.RunGit("add", ".gitattributes");
-            repo.RunGit("commit", "-q", "-m", "attributes");
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+            CommitStuckCrlfFile(repo, "base");
             repo.Write("f.txt", "local\n");
             var head = repo.Head;
             var git = repo.Git;
@@ -2294,7 +2294,7 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("release");
             repo.RunGit("switch", "-q", "main");
 
-            var branch = repo.Git.Branches().First(item => !item.IsRemote && item.Name == "release");
+            var branch = repo.Git.ReadBranches().Branches.First(item => !item.IsRemote && item.Name == "release");
             var checkout = repo.Git.Checkout(branch.Name);
             repo.RunGit("switch", "-q", "main");
             var merge = repo.Git.Integrate(UpdateStrategy.Merge, branch.Ref, branch.Name);
@@ -2309,7 +2309,7 @@ namespace Upwake.Vetka.Tests
         public void CheckoutRemote_OfABranchThatExistsLocally_ChecksItOutAndSaysItIsBehind()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             upstream.RunGit("switch", "-q", "-c", "feature");
             upstream.Write("feature.txt", "1\n");
             upstream.CommitAll("feature 1");
@@ -2333,7 +2333,7 @@ namespace Upwake.Vetka.Tests
         public void CheckoutRemote_OfAnotherRemotesBranchWithTheSameName_Refuses()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             local.RunGit("remote", "add", "fork", remote.Root);
             local.RunGit("fetch", "-q", "fork");
@@ -2352,7 +2352,7 @@ namespace Upwake.Vetka.Tests
         public void UpdateProject_WhenTheUpstreamWasDeleted_SaysSo()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             upstream.RunGit("switch", "-q", "-c", "feature");
             upstream.RunGit("push", "-q", "-u", "origin", "feature");
             using var local = remote.Clone("local");
@@ -2475,12 +2475,7 @@ namespace Upwake.Vetka.Tests
         public void Switch_WithAStuckFileAndAStashedFileSavedAgain_KeepsTheSaveAndTheStash(bool merge)
         {
             using var repo = CreateDivergedBranches();
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
-            repo.CommitAll("crlf");
-            repo.Write(".gitattributes", "*.txt text eol=lf\n");
-            repo.RunGit("add", ".gitattributes");
-            repo.RunGit("commit", "-q", "-m", "attributes");
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+            CommitStuckCrlfFile(repo, "crlf");
             repo.Write("f.txt", "local\n");
             var git = repo.Git;
             var saved = false;
@@ -2511,12 +2506,7 @@ namespace Upwake.Vetka.Tests
         {
             using var repo = TestRepository.Create();
             repo.Write("f.txt", "f\n");
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
-            repo.CommitAll("crlf");
-            repo.Write(".gitattributes", "*.txt text eol=lf\n");
-            repo.RunGit("add", ".gitattributes");
-            repo.RunGit("commit", "-q", "-m", "attributes");
-            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+            CommitStuckCrlfFile(repo, "crlf");
             repo.Write("f.txt", "local\n");
             var git = repo.Git;
             git.BeforeCommand = MoveBackAfterStashing(repo, "crlf.txt");
@@ -2970,7 +2960,7 @@ namespace Upwake.Vetka.Tests
         public void CheckoutRemote_WithALocalBranchNamedLikeIt_ChecksOutTheRemoteBranch()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             upstream.RunGit("switch", "-q", "-c", "feature");
             upstream.Write("g.txt", "feature\n");
             upstream.CommitAll("feature");
@@ -2989,7 +2979,7 @@ namespace Upwake.Vetka.Tests
         public void CheckoutRemote_OfABranchThatOnlyPushesThere_AdvisesAMerge()
         {
             using var remote = TestRepository.CreateBare();
-            using var upstream = PublishBase(remote);
+            using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             local.RunGit("switch", "-q", "-c", "feature", "--track", "origin/main");
             local.Write("g.txt", "g\n");
@@ -3339,21 +3329,11 @@ namespace Upwake.Vetka.Tests
             return repo;
         }
 
-        private static TestRepository PublishBase(TestRepository remote)
-        {
-            var upstream = remote.Clone("upstream");
-            upstream.Write("f.txt", "base\n");
-            upstream.Write("o.txt", "o\n");
-            upstream.CommitAll("base");
-            upstream.RunGit("push", "-q", "-u", "origin", "main");
-            return upstream;
-        }
-
         [Test]
         public void CherryPick_TakesOnlyTheChosenCommitWithItsMessage()
         {
             using var repo = CreateFeatureBranch();
-            var pick = Short(repo, "feature");
+            var pick = repo.Short("feature");
             var before = repo.Head;
 
             var result = repo.Git.CherryPick(pick);
@@ -3372,7 +3352,7 @@ namespace Upwake.Vetka.Tests
             using var repo = CreateFeatureBranch();
             repo.Write("g.txt", "local\n");
 
-            var result = repo.Git.CherryPick(Short(repo, "feature"));
+            var result = repo.Git.CherryPick(repo.Short("feature"));
 
             Assert.IsTrue(result.IsSuccess, result.Message);
             StringAssert.EndsWith(", local changes restored", result.Message);
@@ -3388,7 +3368,7 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("main f");
             repo.Write("g.txt", "local\n");
             var before = repo.Snapshot();
-            var pick = Short(repo, "feature");
+            var pick = repo.Short("feature");
 
             var result = repo.Git.CherryPick(pick);
 
@@ -3404,7 +3384,7 @@ namespace Upwake.Vetka.Tests
         public void CherryPick_OfACommitAlreadyInTheBranch_Refuses()
         {
             using var repo = CreateFeatureBranch();
-            var commit = Short(repo, "main~1");
+            var commit = repo.Short("main~1");
 
             var result = repo.Git.CherryPick(commit);
 
@@ -3416,7 +3396,7 @@ namespace Upwake.Vetka.Tests
         public void CherryPick_WhoseChangesAreAlreadyThere_SaysSoAndChangesNothing()
         {
             using var repo = CreateFeatureBranch();
-            var pick = Short(repo, "feature");
+            var pick = repo.Short("feature");
             Assert.IsTrue(repo.Git.CherryPick(pick).IsSuccess);
             var head = repo.Head;
 
@@ -3445,7 +3425,7 @@ namespace Upwake.Vetka.Tests
             repo.RunGit("commit", "-q", "--no-edit");
             var head = repo.Head;
 
-            var result = repo.Git.CherryPick(Short(repo, "extra"));
+            var result = repo.Git.CherryPick(repo.Short("extra"));
 
             Assert.IsFalse(result.IsSuccess);
             Assert.AreEqual("Cannot cherry-pick: an earlier cherry-pick or revert of several commits is unfinished, " +
@@ -3457,7 +3437,7 @@ namespace Upwake.Vetka.Tests
         public void CherryPick_OntoABranchWithoutCommits_Refuses()
         {
             using var repo = CreateFeatureBranch();
-            var pick = Short(repo, "feature");
+            var pick = repo.Short("feature");
             repo.RunGit("switch", "-q", "--orphan", "fresh");
 
             var result = repo.Git.CherryPick(pick);
@@ -3471,7 +3451,7 @@ namespace Upwake.Vetka.Tests
         public void CherryPick_StoppedByALockedIndex_ShowsGitsReason()
         {
             using var repo = CreateFeatureBranch();
-            var pick = Short(repo, "feature");
+            var pick = repo.Short("feature");
             repo.Write(".git/index.lock", "");
             var git = repo.Git;
             git.LockRetryTimeout = TimeSpan.Zero;
@@ -3489,12 +3469,12 @@ namespace Upwake.Vetka.Tests
             using var repo = CreateFeatureBranch();
             repo.Write("a.txt", "mine, not tracked\n");
 
-            var other = repo.Git.CherryPick(Short(repo, "feature"));
-            var adding = repo.Git.CherryPick(Short(repo, "feature~1"));
+            var other = repo.Git.CherryPick(repo.Short("feature"));
+            var adding = repo.Git.CherryPick(repo.Short("feature~1"));
 
             Assert.IsTrue(other.IsSuccess, other.Message);
             Assert.IsFalse(adding.IsSuccess);
-            StringAssert.StartsWith($"Cherry-pick of {Short(repo, "feature~1")} is not possible, " +
+            StringAssert.StartsWith($"Cherry-pick of {repo.Short("feature~1")} is not possible, " +
                                     "it would overwrite these files that Git does not track", adding.Message);
             StringAssert.Contains("a.txt", adding.Message);
             Assert.AreEqual("mine, not tracked\n", repo.Read("a.txt"));
@@ -3506,7 +3486,7 @@ namespace Upwake.Vetka.Tests
             using var repo = CreateFeatureBranch();
             repo.RunGit("switch", "-q", "feature");
             repo.RunGit("merge", "-q", "--no-ff", "-m", "merge main", "main");
-            var merge = Short(repo, "HEAD");
+            var merge = repo.Short("HEAD");
             repo.RunGit("switch", "-q", "main");
 
             var result = repo.Git.CherryPick(merge);
@@ -3521,7 +3501,7 @@ namespace Upwake.Vetka.Tests
             using var repo = CreateFeatureBranch();
             repo.Write("f.txt", "1\n2\nmain\n");
             repo.CommitAll("main f");
-            var target = Short(repo, "HEAD");
+            var target = repo.Short("HEAD");
             repo.Write("m.txt", "main 2\n");
             repo.CommitAll("later");
 
@@ -3538,7 +3518,7 @@ namespace Upwake.Vetka.Tests
         public void Revert_OfACommitOutsideTheBranch_Refuses()
         {
             using var repo = CreateFeatureBranch();
-            var commit = Short(repo, "feature");
+            var commit = repo.Short("feature");
 
             var result = repo.Git.Revert(commit);
 
@@ -3553,7 +3533,7 @@ namespace Upwake.Vetka.Tests
             using var repo = CreateFeatureBranch();
             repo.Write("f.txt", "1\n2\nmain\n");
             repo.CommitAll("main f");
-            var target = Short(repo, "HEAD");
+            var target = repo.Short("HEAD");
             repo.Write("f.txt", "1\n2\nagain\n");
             repo.CommitAll("again");
             repo.Write("g.txt", "local\n");
@@ -3579,7 +3559,7 @@ namespace Upwake.Vetka.Tests
             var missing = git.CommitsMissingFromHead(tip, 10);
 
             CollectionAssert.AreEqual(new[] { "change f", "add a", "base" }, log);
-            CollectionAssert.AreEquivalent(new[] { Short(repo, "feature"), Short(repo, "feature~1") }, missing);
+            CollectionAssert.AreEquivalent(new[] { repo.Short("feature"), repo.Short("feature~1") }, missing);
             Assert.IsNull(git.CommitOf("refs/heads/missing"));
         }
 
@@ -3649,9 +3629,6 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("main");
             return repo;
         }
-
-        private static string Short(TestRepository repo, string revision) =>
-            repo.RunGit("rev-parse", "--short", revision);
 
         private static TestRepository CreateDivergedBranches()
         {

@@ -9,16 +9,16 @@ namespace Upwake.Vetka
     {
         public GitPushTarget? PushTarget() => PushDestination().Target;
 
-        public (GitPushTarget? Target, string Problem) PushDestination()
+        public (string Branch, GitPushTarget? Target, string Problem) PushDestination()
         {
             var branch = CurrentBranch(out var error);
             if (string.IsNullOrEmpty(branch) || branch == "HEAD")
             {
-                return (null, branch == null ? error.Message : "No branch is checked out");
+                return (branch, null, branch == null ? error.Message : "No branch is checked out");
             }
 
             var target = PushTarget(branch, out var problem);
-            return (target, problem);
+            return (branch, target, problem);
         }
 
         private GitPushTarget? PushTarget(string branch, out string problem)
@@ -29,21 +29,21 @@ namespace Upwake.Vetka
                 return null;
             }
 
-            var exists = Run("rev-parse", "-q", "--verify", $"refs/remotes/{chosen}/{branch}").IsSuccess;
-            return new GitPushTarget(chosen, branch, exists);
+            var target = new GitPushTarget(chosen, branch, false);
+            return new GitPushTarget(chosen, branch, CommitOf(target.TrackingRef) != null);
         }
 
-        public string TagRemote(out string problem)
+        public (string Remote, string Problem) TagRemote()
         {
             var branch = CurrentBranch();
-            return ChooseRemote(branch == "HEAD" ? null : branch, out problem);
+            var remote = ChooseRemote(branch == "HEAD" ? null : branch, out var problem);
+            return (remote, problem);
         }
 
         private string ChooseRemote(string branch, out string problem)
         {
-            var config = Run("config", "--get-regexp", @"^(remote\..*\.url|remote\.pushdefault|branch\..*\.(pushremote|remote))$")
-                .Output
-                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            var config = Lines(Run("config", "--get-regexp",
+                    @"^(remote\..*\.url|remote\.pushdefault|branch\..*\.(pushremote|remote))$").Output)
                 .Select(line => line.Split(new[] { ' ' }, 2))
                 .Where(pair => pair.Length == 2)
                 .ToList();
@@ -66,27 +66,27 @@ namespace Upwake.Vetka
             return chosen;
         }
 
-        public (string Tracked, string Head, int Count, List<string> Commits) RemoteOnlyCommits(GitPushTarget target,
-            int limit = 50)
+        public (GitResult Result, string Tracked, string Head, int Count, List<GitCommit> Commits) RemoteOnlyCommits(
+            GitPushTarget target, int limit)
         {
             var tracked = TrackedCommit(target);
             var head = HeadCommit();
             if (tracked == null || head == null)
             {
-                return (null, head, 0, new List<string>());
+                return (GitResult.Success(""), null, head, 0, new List<GitCommit>());
             }
 
-            var count = Run("rev-list", "--count", $"{head}..{tracked}");
-            var log = Run("log", $"{head}..{tracked}", "--pretty=format:%h %s", "-n", limit.ToString());
-            return (tracked, head,
-                count.IsSuccess && int.TryParse(count.Output, out var parsed) ? parsed : 0,
-                !log.IsSuccess || string.IsNullOrWhiteSpace(log.Output)
-                    ? new List<string>()
-                    : log.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList());
+            var only = CommitsOnlyIn(tracked, head, limit);
+            return (only.Result, tracked, head, only.Count, only.Commits);
         }
 
-        public GitResult Push(string forceOver = null, string shownHead = null, PushTags? tags = null) =>
-            PushHead(forceOver, shownHead, tags, out _);
+        public GitResult Push(string forceOver = null, string shownHead = null, PushTags? tags = null)
+        {
+            var destination = PushDestination();
+            return destination.Target.HasValue
+                ? PushTo(destination.Target.Value, forceOver, shownHead, tags, out _)
+                : GitResult.Failure(destination.Problem);
+        }
 
         private static GitResult InterruptiblePush(Func<GitResult> run)
         {
@@ -95,56 +95,30 @@ namespace Upwake.Vetka
         }
 
         private GitResult FetchBranch(GitPushTarget target) =>
-            RunWithProgress("fetch", "--progress", "--recurse-submodules=no", "--no-auto-maintenance", target.Remote,
+            Run("fetch", "--progress", "--recurse-submodules=no", "--no-auto-maintenance", target.Remote,
                 $"+refs/heads/{target.Branch}:{target.TrackingRef}");
 
         private static bool BranchMissing(GitResult fetch) =>
             !fetch.IsSuccess && !fetch.IsCancelled && fetch.Message.Contains("couldn't find remote ref");
 
-        private static readonly Dictionary<string, string> LfsProgress =
-            new Dictionary<string, string> { ["GIT_LFS_FORCE_PROGRESS"] = "1" };
+        private string TrackedCommit(GitPushTarget target) => CommitOf(target.TrackingRef);
 
-        private string TrackedCommit(GitPushTarget target)
-        {
-            var tracked = Run("rev-parse", "-q", "--verify", target.TrackingRef);
-            return tracked.IsSuccess ? tracked.Output : null;
-        }
-
-        private GitResult PushHead(string forceOver, string shownHead, PushTags? tags, out int newTags)
+        private GitResult PushTo(GitPushTarget target, string forceOver, string shownHead, PushTags? tags,
+            out int newTags)
         {
             newTags = 0;
-            var branch = CurrentBranch(out var branchError);
-            if (branch == null)
-            {
-                return branchError;
-            }
-
-            if (branch == "HEAD")
-            {
-                return GitResult.Failure("Cannot push: no branch is checked out");
-            }
-
-            var found = PushTarget(branch, out var problem);
-            if (!found.HasValue)
-            {
-                return GitResult.Failure(problem);
-            }
-
-            var target = found.Value;
-            var outgoing = Run(new[] { "rev-list", "--count" }.Concat(OutgoingRange(target, "HEAD")).ToArray());
-            var count = outgoing.IsSuccess && int.TryParse(outgoing.Output, out var parsed) ? parsed : 0;
+            var count = CountCommits(OutgoingRange(target, "HEAD").ToArray()) ?? 0;
             var force = forceOver != null && target.Exists;
             var removed = 0;
             if (force && shownHead != null && HeadCommit() != shownHead)
             {
                 return GitResult.Failure(
-                    $"Force push stopped: {branch} has changed since the Push window showed it, look at it again");
+                    $"Force push stopped: {target.Branch} has changed since the Push window showed it, look at it again");
             }
 
             if (force)
             {
-                var lost = Run("rev-list", "--count", $"HEAD..{forceOver}");
-                removed = lost.IsSuccess && int.TryParse(lost.Output, out var dropped) ? dropped : 0;
+                removed = CountCommits($"HEAD..{forceOver}") ?? 0;
             }
 
             var arguments = new List<string> { "push", "--progress" };
@@ -166,7 +140,7 @@ namespace Upwake.Vetka
             arguments.Add(target.Remote);
             arguments.Add("HEAD");
             var pushed = HeadCommit();
-            var result = InterruptiblePush(() => RunWithProgress(LfsProgress, arguments.ToArray()));
+            var result = InterruptiblePush(() => Run(arguments.ToArray()));
             if (result.IsCancelled)
             {
                 return result;
@@ -203,7 +177,7 @@ namespace Upwake.Vetka
                     ? null
                     : $"{target.Remote} already has {(taken.Count == 1 ? "tag" : "tags")} {string.Join(", ", taken)} " +
                       $"on {(taken.Count == 1 ? "another commit" : "other commits")}";
-                var tagsSent = newTags > 0 ? $"Pushed {Counted(newTags, "tag")} to {target.Remote}" : null;
+                var tagsSent = newTags > 0 ? $"Pushed {Texts.Counted(newTags, "tag")} to {target.Remote}" : null;
                 var rejected = result.Message.Contains("[rejected]") &&
                                (result.Message.Contains("fetch first") || result.Message.Contains("non-fast-forward"));
                 if (rejected && tags.HasValue && count == 0 && target.Exists)
@@ -214,14 +188,13 @@ namespace Upwake.Vetka
                     }
 
                     return refusal == null ? GitResult.Success(tagsSent ?? "No new tags to push")
-                        : tagsSent != null ? GitResult.Done($"{tagsSent}, but {refusal}")
-                        : GitResult.Failure($"Tags not pushed: {refusal}");
+                        : TagsRefused(tagsSent, refusal);
                 }
 
                 if (rejected)
                 {
-                    return GitResult.Rejected($"Push rejected: {target.Name} has commits that {branch} does not have" +
-                                              (newTags > 0 ? $". {Counted(newTags, "tag")} pushed anyway" : ""));
+                    return GitResult.Rejected($"Push rejected: {target.Name} has commits that {target.Branch} does not have" +
+                                              (newTags > 0 ? $". {Texts.Counted(newTags, "tag")} pushed anyway" : ""));
                 }
 
                 if (taken.Count == 0 || refused != taken.Count)
@@ -231,13 +204,15 @@ namespace Upwake.Vetka
 
                 RememberPushed(target, pushed);
                 var landed = count > 0 || removed > 0 || !target.Exists;
-                var sent = landed ? PushedText(force, count, removed, newTags, target) : tagsSent;
-                return sent != null ? GitResult.Done($"{sent}, but {refusal}") : GitResult.Failure($"Tags not pushed: {refusal}");
+                return TagsRefused(landed ? PushedText(force, count, removed, newTags, target) : tagsSent, refusal);
             }
 
             RememberPushed(target, pushed);
             return GitResult.Success(PushedText(force, count, removed, newTags, target));
         }
+
+        private static GitResult TagsRefused(string sent, string refusal) =>
+            sent != null ? GitResult.Done($"{sent}, but {refusal}") : GitResult.Failure($"Tags not pushed: {refusal}");
 
         private void RememberPushed(GitPushTarget target, string pushed)
         {
@@ -254,17 +229,17 @@ namespace Upwake.Vetka
                 var parts = new List<string>();
                 if (count > 0)
                 {
-                    parts.Add($"{Counted(count, "commit")} pushed");
+                    parts.Add($"{Texts.Counted(count, "commit")} pushed");
                 }
 
                 if (removed > 0)
                 {
-                    parts.Add($"{Counted(removed, "commit")} removed");
+                    parts.Add($"{Texts.Counted(removed, "commit")} removed");
                 }
 
                 if (tags > 0)
                 {
-                    parts.Add($"{Counted(tags, "tag")} pushed");
+                    parts.Add($"{Texts.Counted(tags, "tag")} pushed");
                 }
 
                 return parts.Count > 0
@@ -274,8 +249,8 @@ namespace Upwake.Vetka
 
             var sent = string.Join(" and ", new[]
             {
-                count > 0 ? Counted(count, "commit") : null,
-                tags > 0 ? Counted(tags, "tag") : null
+                count > 0 ? Texts.Counted(count, "commit") : null,
+                tags > 0 ? Texts.Counted(tags, "tag") : null
             }.Where(part => part != null));
             if (!target.Exists)
             {
@@ -295,8 +270,7 @@ namespace Upwake.Vetka
         private static readonly Regex RefusedLine = new Regex(@"^\s*!\s+\[([^\]]+)\]");
 
         private static List<string> PushedRefs(GitResult result, Regex line) =>
-            (result.Error + "\n" + result.Output)
-            .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            Lines(result.Error + "\n" + result.Output)
             .Select(text => line.Match(text))
             .Where(match => match.Success)
             .Select(match => match.Groups[1].Value)
@@ -339,8 +313,7 @@ namespace Upwake.Vetka
                 return null;
             }
 
-            return refs.Output
-                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            return Lines(refs.Output)
                 .Select(line => line.Split(' '))
                 .Where(fields => fields.Length == 2 || fields.Length == 3 && fields[2].Length == 0)
                 .ToDictionary(fields => fields[0], fields => fields[1], StringComparer.Ordinal);
@@ -403,15 +376,9 @@ namespace Upwake.Vetka
                 return $"{shown}: updated";
             }
 
-            return removed == 0 ? $"{shown}: {Counted(added, "new commit")}"
-                : added == 0 ? $"{shown}: {Counted(removed, "commit")} removed on the remote"
-                : $"{shown}: rewritten on the remote, {Counted(added, "new commit")}, {removed} removed";
-        }
-
-        public GitIdentity Identity(bool global)
-        {
-            var identities = Identities();
-            return global ? identities.Global : identities.Local;
+            return removed == 0 ? $"{shown}: {Texts.Counted(added, "new commit")}"
+                : added == 0 ? $"{shown}: {Texts.Counted(removed, "commit")} removed on the remote"
+                : $"{shown}: rewritten on the remote, {Texts.Counted(added, "new commit")}, {removed} removed";
         }
 
         public (GitResult Result, GitIdentity Local, GitIdentity Global) Identities()

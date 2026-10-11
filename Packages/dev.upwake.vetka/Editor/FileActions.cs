@@ -76,7 +76,7 @@ namespace Upwake.Vetka
                                       target.File != null && (!target.FileChange.HasValue ||
                                                               target.FileChange.Value.Status != GitStatus.Untracked &&
                                                               target.FileChange.Value.Status != GitStatus.Added),
-                Run = target => GitLogWindow.ShowHistory(new Git(), target.Folder ?? HistoryPath(target),
+                Run = target => GitLogWindow.ShowHistory(target.Folder ?? HistoryPath(target),
                     target.FromProject, target.Folder != null, target.Folder == null ? target.File : null)
             },
             new Item
@@ -86,7 +86,7 @@ namespace Upwake.Vetka
                                                               target.FileChange.Value.Status == GitStatus.Modified ||
                                                               target.FileChange.Value.Status == GitStatus.TypeChanged ||
                                                               target.FileChange.Value.Status == GitStatus.Unmerged),
-                Run = target => BlameWindow.ShowWindow(new Git(), target.File)
+                Run = target => BlameWindow.ShowWindow(target.File)
             },
             new Item
             {
@@ -108,7 +108,7 @@ namespace Upwake.Vetka
                 Name = CreatePatchName,
                 Counted = target => target.Selected,
                 IsEnabled = target => target.Changes.Count > 0,
-                Run = target => CreatePatch(WithOldPaths(target.Changes))
+                Run = target => CreatePatch(Git.WithOldPaths(target.Changes))
             }
         };
 
@@ -121,15 +121,7 @@ namespace Upwake.Vetka
                     continue;
                 }
 
-                var label = new GUIContent(Label(item, target));
-                if (item.IsEnabled(target))
-                {
-                    menu.AddItem(label, false, () => EditorApplication.delayCall += () => item.Run(target));
-                }
-                else
-                {
-                    menu.AddDisabledItem(label);
-                }
+                Menus.Add(menu, Label(item, target), item.IsEnabled(target), () => item.Run(target));
             }
         }
 
@@ -244,14 +236,9 @@ namespace Upwake.Vetka
         private static string MetaPair(string path) =>
             path.EndsWith(".meta") ? path.Substring(0, path.Length - ".meta".Length) : path + ".meta";
 
-        internal static List<string> WithOldPaths(IEnumerable<GitFileChange> changes) =>
-            changes.SelectMany(change => change.OldPath == null ? new[] { change.Path } : new[] { change.Path, change.OldPath })
-                .Distinct()
-                .ToList();
-
         public static void ShowDiff(GitFileChange change)
         {
-            DiffWindow.ShowWindow(new Git(), change.Path, change.Status == GitStatus.Untracked, change.OldPath);
+            DiffWindow.ShowWindow(change.Path, change.OldPath);
         }
 
         public static void Add(List<string> paths)
@@ -280,19 +267,22 @@ namespace Upwake.Vetka
             var added = shown.Count(change => change.Status == GitStatus.Added);
             var count = shown.Select(change => change.Path).Distinct().Count();
             var files = count == 1 ? Git.FileName(shown[0].Path) : $"{count} files";
-            var git = new Git();
-            RollbackDialog.Show($"Rollback {files}?", added, deleteAdded =>
-                GitOperations.Run("Git: rolling back changes", () => git.Rollback(changes, deleteAdded), result =>
-                {
-                    if (result.IsSuccess)
-                    {
-                        ChangesSelection.instance.Forget(WithOldPaths(changes));
-                    }
+            var deleteAdded = RollbackDialog.Ask($"Rollback {files}?", added);
+            if (deleteAdded == null)
+            {
+                return;
+            }
 
-                    Notification.Show(result.IsSuccess
-                        ? GitResult.Success($"{(count == 1 ? "1 file" : $"{count} files")} rolled back")
-                        : result);
-                }, refreshAssets: true, prepare: UnsavedChanges.SaveOrCancel));
+            var git = new Git();
+            GitOperations.Run("Git: rolling back changes", () => git.Rollback(changes, deleteAdded.Value, count), result =>
+            {
+                if (result.IsSuccess)
+                {
+                    ChangesSelection.instance.Forget(Git.WithOldPaths(changes));
+                }
+
+                Notification.Show(result);
+            }, changesTree: true);
         }
 
         private static void CreatePatch(List<string> files)

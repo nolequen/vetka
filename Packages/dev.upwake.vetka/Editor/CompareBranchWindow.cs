@@ -14,26 +14,14 @@ namespace Upwake.Vetka
         [SerializeField] private string _name;
         [NonSerialized] private Git _git;
         [NonSerialized] private bool _loading;
-        [NonSerialized] private Comparison _comparison;
+        [NonSerialized] private GitComparison _comparison;
         [NonSerialized] private string _selectedFile;
         private Vector2 _scrollPos;
+        [NonSerialized] private int _generation = -1;
 
-        private sealed class Comparison
-        {
-            public GitResult Result;
-            public string Current;
-            public string Tip;
-            public int OnlyHereCount;
-            public List<GitCommit> OnlyHere = new List<GitCommit>();
-            public int OnlyCurrentCount;
-            public List<GitCommit> OnlyCurrent = new List<GitCommit>();
-            public List<GitFileChange> Files = new List<GitFileChange>();
-        }
-
-        public static void ShowWindow(Git git, string reference, string name)
+        public static void ShowWindow(string reference, string name)
         {
             var window = GetWindow<CompareBranchWindow>(false, "Compare", false);
-            window._git = git;
             window._reference = reference;
             window._name = name;
             window._comparison = null;
@@ -48,7 +36,13 @@ namespace Upwake.Vetka
 
         private void OnDisable() => GitOperations.RepositoryChanged -= Refresh;
 
-        private void OnFocus() => Refresh();
+        private void OnFocus()
+        {
+            if (_generation != GitOperations.Generation)
+            {
+                Refresh();
+            }
+        }
 
         private void Refresh()
         {
@@ -59,10 +53,11 @@ namespace Upwake.Vetka
 
             _git ??= new Git();
             _loading = true;
+            _generation = GitOperations.Generation;
             var git = _git;
             var reference = _reference;
             var name = _name;
-            GitOperations.Read("Git: comparing branches", () => Compare(git, reference, name), comparison =>
+            GitOperations.Read("Git: comparing branches", () => git.CompareWithWorkingTree(reference, name, CommitLimit), comparison =>
             {
                 if (!this)
                 {
@@ -77,6 +72,11 @@ namespace Upwake.Vetka
                 }
 
                 _comparison = comparison;
+                if (!comparison.Result.IsSuccess)
+                {
+                    _generation = -1;
+                }
+
                 Repaint();
             }, reason =>
             {
@@ -92,36 +92,10 @@ namespace Upwake.Vetka
                     return;
                 }
 
-                _comparison ??= new Comparison { Result = GitResult.Failure(reason) };
+                _comparison ??= new GitComparison { Result = GitResult.Failure(reason) };
+                _generation = -1;
                 Repaint();
             });
-        }
-
-        private static Comparison Compare(Git git, string reference, string name)
-        {
-            var comparison = new Comparison { Current = git.CurrentBranch() ?? "HEAD" };
-            comparison.Tip = git.CommitOf(reference);
-            if (comparison.Tip == null)
-            {
-                comparison.Result = GitResult.Failure($"{name} cannot be found");
-                return comparison;
-            }
-
-            var head = git.HeadCommit();
-            var onlyHere = git.CommitsOnlyIn(comparison.Tip, head, CommitLimit);
-            var onlyCurrent = head != null
-                ? git.CommitsOnlyIn(head, comparison.Tip, CommitLimit)
-                : (Result: GitResult.Success(""), Count: 0, Commits: new List<GitCommit>());
-            var files = git.DifferencesFromWorkingTree(comparison.Tip);
-            comparison.Result = !onlyHere.Result.IsSuccess ? onlyHere.Result
-                : !onlyCurrent.Result.IsSuccess ? onlyCurrent.Result
-                : files.Result;
-            comparison.OnlyHereCount = onlyHere.Count;
-            comparison.OnlyHere = onlyHere.Commits;
-            comparison.OnlyCurrentCount = onlyCurrent.Count;
-            comparison.OnlyCurrent = onlyCurrent.Commits;
-            comparison.Files = files.Files;
-            return comparison;
         }
 
         private void OnGUI()
@@ -176,11 +150,7 @@ namespace Upwake.Vetka
             foreach (var commit in commits)
             {
                 var rect = GUILayoutUtility.GetRect(0, EditorGUIUtility.singleLineHeight, GUILayout.ExpandWidth(true));
-                GUI.Label(new Rect(rect.x, rect.y, 60, rect.height), commit.Hash);
-                GUI.Label(new Rect(rect.x + 64, rect.y, 80, rect.height), commit.Date);
-                GUI.Label(new Rect(rect.x + 148, rect.y, 110, rect.height), commit.Author);
-                GUI.Label(new Rect(rect.x + 262, rect.y, Mathf.Max(0, rect.width - 262), rect.height),
-                    commit.Tags.Count > 0 ? $"[{string.Join(", ", commit.Tags)}] {commit.Subject}" : commit.Subject);
+                HistoryRows.Commit(rect, commit);
             }
 
             if (count > commits.Count)
@@ -201,39 +171,13 @@ namespace Upwake.Vetka
                 EditorGUILayout.LabelField("No differences", EditorStyles.miniLabel);
             }
 
-            var current = Event.current;
             for (var i = 0; i < files.Count && i < FileLimit; i++)
             {
                 var file = files[i];
                 var rect = GUILayoutUtility.GetRect(0, EditorGUIUtility.singleLineHeight, GUILayout.ExpandWidth(true));
-                if (current.type == EventType.MouseDown && rect.Contains(current.mousePosition))
-                {
-                    _selectedFile = file.Path;
-                    if (current.button == 0 && current.clickCount == 2)
-                    {
-                        ShowDiff(file);
-                    }
-
-                    current.Use();
-                    Repaint();
-                }
-
-                if (current.type == EventType.ContextClick && rect.Contains(current.mousePosition))
-                {
-                    var chosen = file;
-                    var menu = new GenericMenu();
-                    menu.AddItem(new GUIContent("Show Diff"), false, () => ShowDiff(chosen));
-                    menu.ShowAsContext();
-                    current.Use();
-                }
-
-                if (current.type == EventType.Repaint && file.Path == _selectedFile)
-                {
-                    EditorGUI.DrawRect(rect, GitColors.Selection);
-                }
-
                 var label = file.OldPath != null ? $"{file.Path}   (from {file.OldPath})" : file.Path;
-                GUI.Label(rect, label, GitColors.StatusStyle(GUI.skin.label, file.Status));
+                HistoryRows.File(rect, file, label, ref _selectedFile, () => ShowDiff(file),
+                    menu => menu.AddItem(new GUIContent("Show Diff"), false, () => ShowDiff(file)), Repaint);
             }
 
             if (files.Count > FileLimit)
@@ -244,15 +188,13 @@ namespace Upwake.Vetka
 
         private void ShowDiff(GitFileChange file)
         {
-            var git = _git ??= new Git();
             var tip = _comparison?.Tip;
             if (tip == null)
             {
                 return;
             }
 
-            EditorApplication.delayCall += () =>
-                DiffWindow.ShowCompareWindow(git, tip, file.OldPath ?? file.Path, file.Path);
+            EditorApplication.delayCall += () => DiffWindow.ShowCompareWindow(tip, file.OldPath ?? file.Path, file.Path);
         }
     }
 }

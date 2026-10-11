@@ -11,8 +11,6 @@ namespace Upwake.Vetka
         private const double CheckIntervalSeconds = 1;
 
         private static string _headPath;
-        private static DateTime _headTime;
-        private static string _headBranch;
         private static string _currentBranch;
         private static double _nextCheck;
 
@@ -20,19 +18,21 @@ namespace Upwake.Vetka
         {
             EditorApplication.updateMainWindowTitle += UpdateTitle;
             EditorApplication.update += Poll;
+            GitOperations.RepositoryChanged += Refresh;
             Refresh();
         }
 
+        internal static bool InRepository => FindHead(Git.ProjectRoot) != null;
+
         public static void Refresh()
         {
-            _headTime = default;
-            _currentBranch = ReadBranch();
+            _currentBranch = GitSettings.ShowBranchInTitle ? ReadBranch() : null;
             EditorApplication.UpdateMainWindowTitle();
         }
 
         private static void Poll()
         {
-            if (EditorApplication.timeSinceStartup < _nextCheck)
+            if (!GitSettings.ShowBranchInTitle || EditorApplication.timeSinceStartup < _nextCheck)
             {
                 return;
             }
@@ -49,7 +49,7 @@ namespace Upwake.Vetka
 
         private static void UpdateTitle(ApplicationTitleDescriptor descriptor)
         {
-            if (!GitSettings.ShowBranchInTitle || string.IsNullOrEmpty(_currentBranch))
+            if (string.IsNullOrEmpty(_currentBranch))
             {
                 return;
             }
@@ -64,21 +64,8 @@ namespace Upwake.Vetka
         {
             try
             {
-                _headPath ??= FindHead();
-                if (_headPath == null || !File.Exists(_headPath))
-                {
-                    return null;
-                }
-
-                var time = File.GetLastWriteTimeUtc(_headPath);
-                if (time == _headTime)
-                {
-                    return _headBranch;
-                }
-
-                _headTime = time;
-                _headBranch = BranchName(File.ReadAllText(_headPath));
-                return _headBranch;
+                _headPath ??= FindHead(Git.ProjectRoot);
+                return _headPath != null && File.Exists(_headPath) ? BranchName(File.ReadAllText(_headPath)) : null;
             }
             catch (Exception exception)
             {
@@ -104,8 +91,6 @@ namespace Upwake.Vetka
 
             return head.Length >= 7 ? $"detached at {head.Substring(0, 7)}" : null;
         }
-
-        private static string FindHead() => FindHead(Directory.GetParent(Application.dataPath)?.FullName);
 
         internal static string FindHead(string directory)
         {

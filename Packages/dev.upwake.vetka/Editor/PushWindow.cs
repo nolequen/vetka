@@ -11,21 +11,23 @@ namespace Upwake.Vetka
         [NonSerialized] private Git _git;
         private Vector2 _filesScrollPos;
         [NonSerialized] private List<string> _commits;
+        [NonSerialized] private int _commitCount;
+        [NonSerialized] private string _readProblem;
         private string _localBranch;
         private GitPushTarget? _target;
         [NonSerialized] private string _problem;
         [NonSerialized] private string _tracked;
         [NonSerialized] private string _head;
         [NonSerialized] private int _remoteOnlyCount;
-        [NonSerialized] private List<string> _remoteOnly;
+        [NonSerialized] private List<GitCommit> _remoteOnly;
         [NonSerialized] private bool _loading;
         [NonSerialized] private bool _pushing;
+        [NonSerialized] private int _generation = -1;
 
-        public static void ShowWindow(Git git)
+        public static void ShowWindow()
         {
             var window = GetWindow<PushWindow>(utility: true, "Commits to push");
             window.minSize = new Vector2(400, 220);
-            window._git = git;
             window.Refresh();
         }
 
@@ -33,7 +35,13 @@ namespace Upwake.Vetka
 
         private void OnDisable() => GitOperations.RepositoryChanged -= Refresh;
 
-        private void OnFocus() => Refresh();
+        private void OnFocus()
+        {
+            if (_generation != GitOperations.Generation)
+            {
+                Refresh();
+            }
+        }
 
         private void Refresh()
         {
@@ -44,6 +52,7 @@ namespace Upwake.Vetka
 
             _git ??= new Git();
             _loading = true;
+            _generation = GitOperations.Generation;
 
             var git = _git;
             GitOperations.Read(
@@ -52,10 +61,9 @@ namespace Upwake.Vetka
                 {
                     var destination = git.PushDestination();
                     var remoteOnly = destination.Target.HasValue && destination.Target.Value.Exists
-                        ? git.RemoteOnlyCommits(destination.Target.Value)
-                        : (null, null, 0, new List<string>());
-                    return (commits: git.OutgoingCommits(), local: git.CurrentBranch(), target: destination,
-                        remoteOnly);
+                        ? git.RemoteOnlyCommits(destination.Target.Value, 10)
+                        : (GitResult.Success(""), null, null, 0, new List<GitCommit>());
+                    return (outgoing: git.OutgoingCommits(destination.Target), target: destination, remoteOnly);
                 },
                 state =>
                 {
@@ -64,8 +72,12 @@ namespace Upwake.Vetka
                         return;
                     }
 
-                    _commits = state.commits;
-                    _localBranch = state.local;
+                    _commits = state.outgoing.Commits;
+                    _commitCount = state.outgoing.Count;
+                    _readProblem = !state.outgoing.Result.IsSuccess ? state.outgoing.Result.Message
+                        : !state.remoteOnly.Result.IsSuccess ? state.remoteOnly.Result.Message
+                        : null;
+                    _localBranch = state.target.Branch;
                     _target = state.target.Target;
                     _problem = state.target.Problem;
                     _tracked = state.remoteOnly.Tracked;
@@ -73,6 +85,11 @@ namespace Upwake.Vetka
                     _remoteOnlyCount = state.remoteOnly.Count;
                     _remoteOnly = state.remoteOnly.Commits;
                     _loading = false;
+                    if (_readProblem != null)
+                    {
+                        _generation = -1;
+                    }
+
                     Repaint();
                 },
                 _ =>
@@ -101,10 +118,15 @@ namespace Upwake.Vetka
                 EditorGUILayout.HelpBox(_problem, MessageType.Warning);
             }
 
+            if (_readProblem != null)
+            {
+                EditorGUILayout.HelpBox(_readProblem, MessageType.Warning);
+            }
+
             if (_target.HasValue && _remoteOnlyCount > 0)
             {
                 EditorGUILayout.HelpBox(
-                    $"{_target.Value.Name} has {Commits(_remoteOnlyCount)} that {_localBranch ?? "your branch"} does not " +
+                    $"{_target.Value.Name} has {Texts.Counted(_remoteOnlyCount, "commit")} that {_localBranch ?? "your branch"} does not " +
                     (_commits != null && _commits.Any()
                         ? "have. Push will offer to merge or rebase them first, Force Push removes them from "
                         : "have and there is nothing to push. Force Push removes them from ") +
@@ -129,8 +151,13 @@ namespace Upwake.Vetka
                     {
                         EditorGUILayout.LabelField(commit);
                     }
+
+                    if (_commitCount > _commits.Count)
+                    {
+                        EditorGUILayout.LabelField($"...and {_commitCount - _commits.Count} more", EditorStyles.miniLabel);
+                    }
                 }
-                else if (_target.HasValue || _problem == null)
+                else if (_readProblem == null && (_target.HasValue || _problem == null))
                 {
                     EditorGUILayout.LabelField("No commits to push");
                 }
@@ -190,8 +217,6 @@ namespace Upwake.Vetka
             EditorGUILayout.EndHorizontal();
         }
 
-        private static string Commits(int count) => count == 1 ? "1 commit" : $"{count} commits";
-
         private static readonly GUIContent PushTagsLabel =
             new GUIContent("Push tags", "Push tags along with the commits");
 
@@ -215,11 +240,11 @@ namespace Upwake.Vetka
             }
 
             var target = _target.Value;
-            var shown = _remoteOnly.Take(10).ToList();
+            var shown = _remoteOnly.Select(commit => $"{commit.Hash} {commit.Subject}").ToList();
             var more = _remoteOnlyCount - shown.Count;
-            var list = string.Join("\n", shown) + (more > 0 ? $"\n...and {Commits(more)} more" : "");
+            var list = string.Join("\n", shown) + (more > 0 ? $"\n...and {more} more" : "");
             if (!EditorUtility.DisplayDialog($"Force push to {target.Name}?",
-                    $"These {Commits(_remoteOnlyCount)} on {target.Name} are not in {_localBranch} and will be removed " +
+                    $"These {Texts.Counted(_remoteOnlyCount, "commit")} on {target.Name} are not in {_localBranch} and will be removed " +
                     $"from {target.Name}:\n\n{list}\n\nAnyone who already has them will have to fix their branch.",
                     "Force Push", "Cancel"))
             {
@@ -238,25 +263,13 @@ namespace Upwake.Vetka
             GitOperations.Run(forceOver == null ? "Git: pushing" : "Git: force pushing",
                 () => git.Push(forceOver, shownHead, tags), result =>
             {
-                _pushing = false;
+                _pushing = result.IsRejected;
                 if (result.IsDone && this)
                 {
                     Close();
                 }
-                else if (this)
-                {
-                    Refresh();
-                }
 
-                if (result.IsRejected)
-                {
-                    _pushing = true;
-                    RejectedPush.Offer(git, result, OnUpdatedAndPushed, tags, StopPushing);
-                }
-                else
-                {
-                    Notification.Show(result);
-                }
+                RejectedPush.Report(git, result, OnUpdatedAndPushed, tags, StopPushing);
             }, reportsProgress: true);
         }
 
@@ -279,10 +292,6 @@ namespace Upwake.Vetka
             if (result.IsDone)
             {
                 Close();
-            }
-            else
-            {
-                Refresh();
             }
         }
     }

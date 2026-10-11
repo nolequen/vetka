@@ -35,10 +35,7 @@ namespace Upwake.Vetka
 
         private static readonly Regex HunkHeader = new Regex(@"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@");
 
-        private const float NumberWidth = 44;
-
         [SerializeField] private string _path;
-        [SerializeField] private bool _untracked;
         [SerializeField] private string _oldPath;
         [SerializeField] private string _commit;
         [SerializeField] private bool _compare;
@@ -48,28 +45,23 @@ namespace Upwake.Vetka
         private int _longestLine;
         [NonSerialized] private bool _loading;
         private Vector2 _scrollPos;
-        private GUIStyle _textStyle;
-        private GUIStyle _numberStyle;
 
-        public static void ShowWindow(Git git, string path, bool untracked, string oldPath = null) =>
-            Show(git, path, untracked, null, oldPath);
+        public static void ShowWindow(string path, string oldPath = null) => Show(path, null, oldPath);
 
-        public static void ShowCommitWindow(Git git, string commit, string path) => Show(git, path, false, commit);
+        public static void ShowCommitWindow(string commit, string path) => Show(path, commit);
 
-        public static void ShowCompareWindow(Git git, string commit, string pathAtCommit, string localPath) =>
-            Show(git, localPath, false, commit, pathAtCommit, true);
+        public static void ShowCompareWindow(string commit, string pathAtCommit, string localPath) =>
+            Show(localPath, commit, pathAtCommit, true);
 
-        private static void Show(Git git, string path, bool untracked, string commit, string oldPath = null,
-            bool compare = false)
+        private static void Show(string path, string commit, string oldPath = null, bool compare = false)
         {
             var window = GetWindow<DiffWindow>(utility: false, "Diff");
-            window._git = git;
             window._path = path;
-            window._untracked = untracked;
             window._commit = commit;
             window._oldPath = oldPath;
             window._compare = compare;
             window._lines = null;
+            window._scrollPos = Vector2.zero;
             window.minSize = new Vector2(500, 300);
             window.Refresh();
         }
@@ -86,14 +78,13 @@ namespace Upwake.Vetka
 
             var git = _git;
             var path = _path;
-            var untracked = _untracked;
             var oldPath = string.IsNullOrEmpty(_oldPath) ? null : _oldPath;
             var commit = string.IsNullOrEmpty(_commit) ? null : _commit;
             var compare = _compare;
             GitOperations.Read(
                 "Git: reading the diff",
                 () => Parse(compare ? git.CompareWithLocal(commit, oldPath ?? path, path)
-                    : commit == null ? git.FileDiff(path, untracked, oldPath)
+                    : commit == null ? git.FileDiff(path, oldPath)
                     : git.CommitFileDiff(commit, path)),
                 lines => SetLines(path, commit, compare, lines),
                 reason => SetLines(path, commit, compare, Parse(GitResult.Failure(reason))));
@@ -114,7 +105,6 @@ namespace Upwake.Vetka
                 _longestLine = Mathf.Max(_longestLine, line.Text.Length);
             }
 
-            _scrollPos = Vector2.zero;
             _loading = false;
             Repaint();
         }
@@ -232,67 +222,22 @@ namespace Upwake.Vetka
 
         private void DrawLines()
         {
-            EnsureStyles();
-
-            var lineHeight = Mathf.Ceil(_textStyle.lineHeight) + 2;
-            var charWidth = _textStyle.CalcSize(new GUIContent("M")).x;
-            var textX = NumberWidth * 2 + 8;
-            var contentWidth = Mathf.Max(position.width - 16, textX + _longestLine * charWidth + 16);
-
-            _scrollPos = GUILayout.BeginScrollView(_scrollPos);
-            var area = GUILayoutUtility.GetRect(contentWidth, _lines.Count * lineHeight);
-            if (Event.current.type != EventType.Repaint)
-            {
-                GUILayout.EndScrollView();
-                return;
-            }
-
-            var first = Mathf.Max(0, (int)(_scrollPos.y / lineHeight));
-            var last = Mathf.Min(_lines.Count, first + (int)(position.height / lineHeight) + 2);
-            for (var i = first; i < last; i++)
+            const float numberWidth = CodeView.NumberWidth;
+            const float textX = numberWidth * 2 + 8;
+            CodeView.Draw(position, ref _scrollPos, _lines.Count, _longestLine, textX, (i, rect) =>
             {
                 var line = _lines[i];
-                var rect = new Rect(area.x, area.y + i * lineHeight, contentWidth, lineHeight);
-
                 var background = Background(line.Kind);
                 if (background.a > 0)
                 {
                     EditorGUI.DrawRect(rect, background);
                 }
 
-                GUI.Label(new Rect(rect.x, rect.y, NumberWidth, lineHeight), line.OldNumber, _numberStyle);
-                GUI.Label(new Rect(rect.x + NumberWidth, rect.y, NumberWidth, lineHeight), line.NewNumber,
-                    _numberStyle);
-                GUI.Label(new Rect(rect.x + textX, rect.y, contentWidth - textX, lineHeight), line.Text, _textStyle);
-            }
-
-            GUILayout.EndScrollView();
-        }
-
-        private void EnsureStyles()
-        {
-            if (_textStyle != null)
-            {
-                return;
-            }
-
-            var font = EditorGUIUtility.Load("Fonts/RobotoMono/RobotoMono-Regular.ttf") as Font;
-
-            _textStyle = new GUIStyle(EditorStyles.label)
-            {
-                font = font,
-                fontSize = 12,
-                wordWrap = false,
-                richText = false,
-                padding = new RectOffset(0, 0, 1, 1)
-            };
-
-            _numberStyle = new GUIStyle(_textStyle)
-            {
-                alignment = TextAnchor.MiddleRight,
-                padding = new RectOffset(0, 6, 1, 1),
-                normal = { textColor = Color.gray }
-            };
+                GUI.Label(new Rect(rect.x, rect.y, numberWidth, rect.height), line.OldNumber, CodeView.Number);
+                GUI.Label(new Rect(rect.x + numberWidth, rect.y, numberWidth, rect.height), line.NewNumber,
+                    CodeView.Number);
+                GUI.Label(new Rect(rect.x + textX, rect.y, rect.width - textX, rect.height), line.Text, CodeView.Text);
+            });
         }
 
         private static Color Background(LineKind kind)
@@ -302,7 +247,7 @@ namespace Upwake.Vetka
             {
                 LineKind.Added => dark ? new Color(0.2f, 0.45f, 0.2f, 0.45f) : new Color(0.7f, 0.95f, 0.7f, 0.8f),
                 LineKind.Removed => dark ? new Color(0.55f, 0.2f, 0.2f, 0.45f) : new Color(1f, 0.75f, 0.75f, 0.8f),
-                LineKind.Hunk => dark ? new Color(0.25f, 0.35f, 0.55f, 0.35f) : new Color(0.8f, 0.87f, 1f, 0.8f),
+                LineKind.Hunk => GitColors.Highlight,
                 _ => Color.clear
             };
         }

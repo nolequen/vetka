@@ -33,6 +33,8 @@ namespace Upwake.Vetka
 
         internal const string CancelledReason = "Cancelled";
 
+        internal static int Generation { get; private set; }
+
         static GitOperations()
         {
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
@@ -43,6 +45,14 @@ namespace Upwake.Vetka
 
             EditorApplication.wantsToQuit += OnWantsToQuit;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            EditorApplication.focusChanged += focused =>
+            {
+                if (!focused)
+                {
+                    Generation++;
+                }
+            };
+            EditorApplication.projectChanged += () => Generation++;
         }
 
         private static void OnBeforeAssemblyReload()
@@ -75,22 +85,21 @@ namespace Upwake.Vetka
 
         public static event Action RepositoryChanged;
 
-        public static void Run(string title, Func<GitResult> work, Action<GitResult> onCompleted = null,
-            bool refreshAssets = false, bool reportsProgress = false, Func<bool> prepare = null,
+        public static void Run(string title, Func<GitResult> work, Action<GitResult> onCompleted,
+            bool changesTree = false, bool reportsProgress = false, Func<bool> prepare = null,
             int? progressId = null)
         {
             EditorApplication.LockReloadAssemblies();
             Pending.Enqueue(new Operation
             {
                 Title = title,
-                Prepare = prepare,
+                Prepare = prepare ?? (changesTree ? UnsavedChanges.SaveOrCancel : (Func<bool>)null),
                 Work = () => work(),
-                Completed = result => onCompleted?.Invoke((GitResult)result),
-                Failed = exception =>
-                    onCompleted?.Invoke(GitResult.Failure($"{Describe(title)} failed: {exception.Message}")),
-                Declined = () => onCompleted?.Invoke(GitResult.Cancelled($"{Describe(title)} cancelled")),
+                Completed = result => onCompleted((GitResult)result),
+                Failed = exception => onCompleted(GitResult.Failure($"{Describe(title)} failed: {exception.Message}")),
+                Declined = () => onCompleted(GitResult.Cancelled($"{Describe(title)} cancelled")),
                 Guarded = true,
-                RefreshAssets = refreshAssets,
+                RefreshAssets = changesTree,
                 ReportsProgress = reportsProgress,
                 ProgressId = progressId
             });
@@ -124,7 +133,7 @@ namespace Upwake.Vetka
             {
                 Title = title,
                 Work = () => OperationContext.Interruptible(work, out _),
-                Completed = result => onCompleted?.Invoke((T)result),
+                Completed = result => onCompleted((T)result),
                 Failed = exception => onAborted?.Invoke($"Failed: {exception.Message}"),
                 Cancelled = () => onAborted?.Invoke(CancelledReason)
             });
@@ -276,6 +285,7 @@ namespace Upwake.Vetka
 
                 if (operation.Guarded)
                 {
+                    Generation++;
                     RepositoryChanged?.Invoke();
                 }
             }
@@ -288,8 +298,7 @@ namespace Upwake.Vetka
 
         private static string Describe(string title)
         {
-            var text = title.StartsWith("Git: ") ? title.Substring("Git: ".Length) : title;
-            return text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text.Substring(1);
+            return Texts.Capitalized(title.StartsWith("Git: ") ? title.Substring("Git: ".Length) : title);
         }
 
         private static bool OnWantsToQuit()

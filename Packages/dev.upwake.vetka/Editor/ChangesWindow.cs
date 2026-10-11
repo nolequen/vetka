@@ -10,9 +10,7 @@ namespace Upwake.Vetka
     {
         private sealed class FileEntry
         {
-            public string Path;
-            public string OldPath;
-            public GitStatus Status;
+            public GitFileChange Change;
             public bool Checked;
             public GUIContent Name;
             public GUIContent Note;
@@ -48,35 +46,31 @@ namespace Upwake.Vetka
 
         private static readonly Color Grey = new Color(0.5f, 0.5f, 0.5f);
 
-        private static GUIStyle _foldoutStyle;
-        private static GUIStyle _greyStyle;
-        private static GUIStyle _hintStyle;
-        private static GUIStyle _messageStyle;
         private static GUIStyle _paddingStyle;
 
-        private static GUIStyle FoldoutStyle => _foldoutStyle ??= new GUIStyle(EditorStyles.foldout)
+        private static readonly SkinStyle FoldoutStyle = new SkinStyle(() => new GUIStyle(EditorStyles.foldout)
         {
             fontStyle = FontStyle.Bold
-        };
+        });
 
-        private static GUIStyle GreyStyle => _greyStyle ??= new GUIStyle(EditorStyles.label)
+        private static readonly SkinStyle GreyStyle = new SkinStyle(() => new GUIStyle(EditorStyles.label)
         {
             normal = { textColor = Grey }
-        };
+        });
 
-        private static GUIStyle HintStyle => _hintStyle ??= new GUIStyle(EditorStyles.label)
+        private static readonly SkinStyle HintStyle = new SkinStyle(() => new GUIStyle(EditorStyles.label)
         {
             normal = { textColor = Grey },
             alignment = TextAnchor.UpperLeft,
             padding = new RectOffset(4, 4, 3, 0)
-        };
+        });
 
-        private static GUIStyle MessageStyle => _messageStyle ??= new GUIStyle(EditorStyles.textArea)
+        private static readonly SkinStyle MessageStyle = new SkinStyle(() => new GUIStyle(EditorStyles.textArea)
         {
             wordWrap = true,
             padding = new RectOffset(EditorStyles.textArea.padding.left, 22, EditorStyles.textArea.padding.top,
                 EditorStyles.textArea.padding.bottom)
-        };
+        });
 
         private static GUIStyle PaddingStyle => _paddingStyle ??= new GUIStyle
         {
@@ -100,10 +94,9 @@ namespace Upwake.Vetka
             }
         }
 
-        public static void ShowWindow(Git git, string message = null)
+        public static void ShowWindow(string message = null)
         {
             var window = Open(focus: true);
-            window._git = git;
             if (message != null)
             {
                 window._message = message;
@@ -198,10 +191,10 @@ namespace Upwake.Vetka
             var changes = ProjectStatus.Current.Entries;
             var selection = ChangesSelection.instance;
             _changes = Entries(changes.Where(change => change.Status != GitStatus.Untracked), selection, true);
-            var tracked = new HashSet<string>(_changes.Select(entry => entry.Path));
+            var tracked = new HashSet<string>(_changes.Select(entry => entry.Change.Path));
             _unversioned = Entries(changes.Where(change => change.Status == GitStatus.Untracked &&
                                                            !tracked.Contains(change.Path)), selection, false);
-            var present = new HashSet<string>(_changes.Concat(_unversioned).Select(entry => entry.Path));
+            var present = new HashSet<string>(_changes.Concat(_unversioned).Select(entry => entry.Change.Path));
             selection.Retain(present, DateTime.UtcNow);
             _selected.IntersectWith(present);
             if (_anchor != null && !present.Contains(_anchor))
@@ -218,7 +211,6 @@ namespace Upwake.Vetka
             bool checkedByDefault) =>
             changes
                 .Select(change => Entry(change, selection.IsChecked(change.Path, checkedByDefault)))
-                .OrderBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
         private static FileEntry Entry(GitFileChange change, bool isChecked)
@@ -236,9 +228,7 @@ namespace Upwake.Vetka
 
             return new FileEntry
             {
-                Path = change.Path,
-                OldPath = change.OldPath,
-                Status = change.Status,
+                Change = change,
                 Checked = isChecked,
                 Name = new GUIContent(Git.FileName(change.Path), tooltip),
                 Note = note == null ? null : new GUIContent(note, tooltip),
@@ -297,7 +287,10 @@ namespace Upwake.Vetka
         private void DrawFiles()
         {
             using var scroll = new EditorGUILayout.ScrollViewScope(_filesScrollPos, GUILayout.ExpandHeight(true));
-            _filesScrollPos = scroll.scrollPosition;
+            if (_changes != null)
+            {
+                _filesScrollPos = scroll.scrollPosition;
+            }
 
             if (_changes == null)
             {
@@ -336,7 +329,7 @@ namespace Upwake.Vetka
                 else if (row.Unversioned)
                 {
                     var expanded = DrawGroupHeader(rect, _unversionedExpanded, "Unversioned Files",
-                        _unversioned.Count, () => FileActions.Add(_unversioned.Select(entry => entry.Path).ToList()));
+                        _unversioned.Count, () => FileActions.Add(_unversioned.Select(entry => entry.Change.Path).ToList()));
                     if (expanded != _unversionedExpanded)
                     {
                         _unversionedExpanded = expanded;
@@ -363,9 +356,9 @@ namespace Upwake.Vetka
             var label = new GUIContent(title);
             expanded = EditorGUI.Foldout(foldoutRect, expanded, label, true, FoldoutStyle);
 
-            var countX = rect.x + FoldoutStyle.CalcSize(label).x + 6;
+            var countX = rect.x + FoldoutStyle.Style.CalcSize(label).x + 6;
             GUI.Label(new Rect(countX, rect.y, Mathf.Max(0, foldoutRect.xMax - countX), rect.height),
-                count == 1 ? "1 file" : $"{count} files", GreyStyle);
+                Texts.Counted(count, "file"), GreyStyle);
 
             if (addAll != null)
             {
@@ -429,15 +422,15 @@ namespace Upwake.Vetka
                 }
                 else if (current.button == 0)
                 {
-                    Select(entry.Path, current.shift, EditorGUI.actionKey);
+                    Select(entry.Change.Path, current.shift, EditorGUI.actionKey);
                     current.Use();
                     Repaint();
                 }
                 else if (current.button == 1)
                 {
-                    if (!_selected.Contains(entry.Path))
+                    if (!_selected.Contains(entry.Change.Path))
                     {
-                        Select(entry.Path, false, false);
+                        Select(entry.Change.Path, false, false);
                     }
 
                     current.Use();
@@ -451,7 +444,7 @@ namespace Upwake.Vetka
                 current.Use();
             }
 
-            if (current.type == EventType.Repaint && _selected.Contains(entry.Path))
+            if (current.type == EventType.Repaint && _selected.Contains(entry.Change.Path))
             {
                 EditorGUI.DrawRect(rect, GitColors.Selection);
             }
@@ -459,7 +452,7 @@ namespace Upwake.Vetka
             var value = EditorGUI.Toggle(toggleRect, entry.Checked);
 
             var x = DrawSegment(labelRect, labelRect.x, entry.Name,
-                GitColors.StatusStyle(EditorStyles.label, entry.Status));
+                GitColors.StatusStyle(EditorStyles.label, entry.Change.Status));
 
             if (entry.Note != null)
             {
@@ -474,7 +467,7 @@ namespace Upwake.Vetka
             if (value != entry.Checked)
             {
                 entry.Checked = value;
-                ChangesSelection.instance.Set(new[] { entry.Path }, value);
+                ChangesSelection.instance.Set(new[] { entry.Change.Path }, value);
             }
         }
 
@@ -496,10 +489,7 @@ namespace Upwake.Vetka
         {
             if (range && _anchor != null)
             {
-                var order = (_changesExpanded ? _changes : new List<FileEntry>())
-                    .Concat(_unversionedExpanded ? _unversioned : new List<FileEntry>())
-                    .Select(entry => entry.Path)
-                    .ToList();
+                var order = VisibleEntries().Select(entry => entry.Change.Path).ToList();
                 var from = order.IndexOf(_anchor);
                 var to = order.IndexOf(path);
                 if (from >= 0 && to >= 0)
@@ -536,20 +526,17 @@ namespace Upwake.Vetka
 
         private void ShowContextMenu()
         {
-            var all = (_changesExpanded ? _changes : new List<FileEntry>())
-                .Concat(_unversionedExpanded ? _unversioned : new List<FileEntry>())
-                .ToList();
-            var selected = all.Where(item => _selected.Contains(item.Path)).Select(Change);
+            var selected = VisibleEntries().Where(item => _selected.Contains(item.Change.Path)).Select(item => item.Change);
             var menu = new GenericMenu();
             FileActions.AddTo(menu, FileActions.ForSelection(selected, _committing));
             menu.ShowAsContext();
         }
 
-        private static GitFileChange Change(FileEntry entry) => new GitFileChange(entry.Status, entry.Path, entry.OldPath);
+        private IEnumerable<FileEntry> VisibleEntries() => _rows.Where(row => row.Entry != null).Select(row => row.Entry);
 
         private static void ShowDiff(FileEntry entry)
         {
-            var change = Change(entry);
+            var change = entry.Change;
             EditorApplication.delayCall += () => FileActions.ShowDiff(change);
         }
 
@@ -614,8 +601,7 @@ namespace Upwake.Vetka
 
         private static string MenuText(string message)
         {
-            var line = message.Split('\r', '\n')[0].Trim().Replace('/', '\u2215');
-            return line.Length > 80 ? line.Substring(0, 77) + "..." : line;
+            return Texts.Shortened(Texts.MenuLabel(message.Split('\r', '\n')[0].Trim()), 80);
         }
 
         private void DrawButtons()
@@ -663,7 +649,7 @@ namespace Upwake.Vetka
         private List<string> SelectedFiles() =>
             _changes == null
                 ? new List<string>()
-                : FileActions.WithOldPaths(_changes.Concat(_unversioned).Where(entry => entry.Checked).Select(Change));
+                : Git.WithOldPaths(_changes.Concat(_unversioned).Where(entry => entry.Checked).Select(entry => entry.Change));
 
         private static string CommitTitle(bool push) => push ? "Git: committing and pushing" : "Git: committing";
 
@@ -738,21 +724,13 @@ namespace Upwake.Vetka
                     }
                     else if (!committed)
                     {
-                        ShowWindow(git, message);
+                        ShowWindow(message);
                     }
 
-                    if (result.IsRejected)
-                    {
-                        RejectedPush.Offer(git, result, tags: tags);
-                    }
-                    else
-                    {
-                        Notification.Show(result);
-                    }
+                    RejectedPush.Report(git, result, tags: tags);
                 },
-                refreshAssets: true,
+                changesTree: true,
                 reportsProgress: push,
-                prepare: UnsavedChanges.SaveOrCancel,
                 progressId: progress
             );
         }

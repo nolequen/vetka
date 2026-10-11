@@ -13,9 +13,6 @@ namespace Upwake.Vetka
             return status.IsSuccess ? status.Output.Length > 0 : (bool?)null;
         }
 
-        private static readonly string[] WorkingTreeStatus =
-            { "status", "--porcelain=v1", "-z", "--untracked-files=all" };
-
         private static readonly string[] PlainStatus =
             { "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames" };
 
@@ -53,55 +50,39 @@ namespace Upwake.Vetka
                     return null;
                 }
 
-                var diff = RunWithEnvironment(environment, "diff", "--name-only", "-z", "--no-renames", commit);
-                return diff.IsSuccess
-                    ? new HashSet<string>(diff.Output.Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries),
-                        StringComparer.Ordinal)
-                    : null;
+                var paths = ChangedPaths(environment, commit);
+                return paths == null ? null : new HashSet<string>(paths, StringComparer.Ordinal);
             });
 
         public (GitResult Result, string Top, string Prefix) ProjectLocation()
         {
             var result = Run("rev-parse", "--show-toplevel", "--show-prefix");
-            var lines = result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            if (!result.IsSuccess || lines.Length == 0)
+            var lines = Lines(result.Output);
+            if (!result.IsSuccess || lines.Count == 0)
             {
                 return (result.IsSuccess ? GitResult.Failure("Cannot find the repository") : result, null, null);
             }
 
-            return (result, Path.GetFullPath(lines[0]), lines.Length > 1 ? lines[1] : "");
+            return (result, Path.GetFullPath(lines[0]), lines.Count > 1 ? lines[1] : "");
         }
-
-        private static readonly string[] MoveStatus =
-            { "status", "--porcelain=v2", "-z", "--untracked-files=all", "--find-renames" };
 
         public (GitResult Result, List<GitFileChange> Changes) WorkingTreeChanges()
         {
-            var result = Run(WorkingTreeStatus);
+            var result = Run(PlainStatus);
             if (!result.IsSuccess)
             {
                 return (result, new List<GitFileChange>());
             }
 
             var changes = ParseWorkingTree(result.Output);
-            var created = changes
-                .Where(change => change.Status == GitStatus.Untracked || change.Status == GitStatus.Added ||
-                                 change.Status == GitStatus.Renamed)
-                .Select(change => change.Path)
-                .ToList();
-            var removed = changes.Where(change => change.Status == GitStatus.Deleted)
-                .Select(change => change.Path)
-                .Concat(changes.Where(change => change.OldPath != null).Select(change => change.OldPath))
-                .ToList();
-            if (created.Count == 0 ||
-                changes.All(change => change.Status != GitStatus.Deleted && change.Status != GitStatus.Renamed))
+            var created = PathsOf(changes, GitStatus.Untracked, GitStatus.Added);
+            var removed = PathsOf(changes, GitStatus.Deleted);
+            if (created.Count == 0 || removed.Count == 0)
             {
                 return (result, Sorted(changes));
             }
 
-            var staged = changes
-                .Where(change => change.Status == GitStatus.Added || change.Status == GitStatus.Renamed)
-                .Select(change => change.Path);
+            var staged = PathsOf(changes, GitStatus.Added);
             var moves = WithTemporaryIndex(environment =>
             {
                 if (!RunWithPathspecs(environment, removed.Concat(staged), "reset", "-q", "HEAD").IsSuccess ||
@@ -110,8 +91,8 @@ namespace Upwake.Vetka
                     return null;
                 }
 
-                var status = RunWithEnvironment(environment, MoveStatus);
-                return status.IsSuccess ? ConfirmedMoves(status.Output) : null;
+                var diff = RunWithEnvironment(environment, "diff", "--find-renames", "--name-status", "-z");
+                return diff.IsSuccess ? ConfirmedMoves(diff.Output) : null;
             });
             if (moves == null)
             {
@@ -119,25 +100,11 @@ namespace Upwake.Vetka
             }
 
             var moved = new HashSet<string>(moves.Select(move => move.Path).Concat(moves.Select(move => move.OldPath)));
-            var shown = new List<GitFileChange>();
-            foreach (var change in changes.Where(change => !moved.Contains(change.Path)))
-            {
-                if (change.Status != GitStatus.Renamed)
-                {
-                    shown.Add(change);
-                    continue;
-                }
-
-                if (!moved.Contains(change.OldPath))
-                {
-                    shown.Add(new GitFileChange(GitStatus.Deleted, change.OldPath));
-                }
-
-                shown.Add(new GitFileChange(GitStatus.Added, change.Path));
-            }
-
-            return (result, Sorted(shown.Concat(moves).ToList()));
+            return (result, Sorted(changes.Where(change => !moved.Contains(change.Path)).Concat(moves).ToList()));
         }
+
+        private static List<string> PathsOf(IEnumerable<GitFileChange> changes, params GitStatus[] statuses) =>
+            changes.Where(change => statuses.Contains(change.Status)).Select(change => change.Path).ToList();
 
         private static List<GitFileChange> Sorted(List<GitFileChange> changes)
         {
@@ -145,99 +112,68 @@ namespace Upwake.Vetka
             return changes;
         }
 
-        private static IEnumerable<(char Index, char WorkTree, string Path, string OldPath)> StatusEntries(
-            string output)
+        private static IEnumerable<(char Index, char WorkTree, string Path)> StatusEntries(string output) =>
+            output.Split('\0')
+                .Where(entry => entry.Length >= 4)
+                .Select(entry => (entry[0], entry[1], entry.Substring(3)));
+
+        private static List<GitFileChange> ParseWorkingTree(string output) =>
+            StatusEntries(output)
+                .Where(entry => !entry.Path.EndsWith("/"))
+                .Select(entry => new GitFileChange(ParseStatus(entry.Index, entry.WorkTree), entry.Path))
+                .ToList();
+
+        private static List<GitFileChange> ConfirmedMoves(string output)
         {
-            var tokens = output.Split('\0');
-            for (var i = 0; i < tokens.Length; i++)
+            var moves = NameStatus(output.Split('\0'))
+                .Where(entry => entry.Status[0] == 'R')
+                .Select(entry => (entry.Path, entry.OldPath, Score: RenameScore(entry.Status)))
+                .ToList();
+            var byPath = new Dictionary<string, (string OldPath, int Score)>(StringComparer.Ordinal);
+            foreach (var move in moves)
             {
-                var entry = tokens[i];
-                if (entry.Length < 4)
-                {
-                    continue;
-                }
-
-                var index = entry[0];
-                var workTree = entry[1];
-                var paired = index == 'R' || index == 'C' || workTree == 'R' || workTree == 'C';
-                var oldPath = paired && i + 1 < tokens.Length ? tokens[++i] : null;
-                yield return (index, workTree, entry.Substring(3), oldPath);
-            }
-        }
-
-        internal static List<GitFileChange> ParseWorkingTree(string output)
-        {
-            var changes = new List<GitFileChange>();
-            foreach (var (index, workTree, path, oldPath) in StatusEntries(output))
-            {
-                if (path.EndsWith("/"))
-                {
-                    continue;
-                }
-
-                if (oldPath != null && (index == 'R' || workTree == 'R'))
-                {
-                    changes.Add(new GitFileChange(
-                        workTree == 'D' ? GitStatus.Deleted : GitStatus.Renamed, path, oldPath));
-                    continue;
-                }
-
-                var status = index == 'C' || workTree == 'C' ? GitStatus.Added : Git.ParseStatus(index, workTree);
-                if (status != GitStatus.Ignored)
-                {
-                    changes.Add(new GitFileChange(status, path));
-                }
+                byPath[move.Path] = (move.OldPath, move.Score);
             }
 
-            return changes;
-        }
-
-        internal static List<GitFileChange> ConfirmedMoves(string output)
-        {
-            var moves = MoveEntries(output).ToList();
-            return moves.Where(move => IsConfirmedMove(move, moves))
+            var oldPaths = new HashSet<string>(moves.Select(move => move.OldPath), StringComparer.Ordinal);
+            return moves.Where(move => IsConfirmedMove(move, moves, byPath, oldPaths))
                 .Select(move => new GitFileChange(GitStatus.Renamed, move.Path, move.OldPath))
                 .ToList();
         }
 
-        private static IEnumerable<(string Path, string OldPath, int Score)> MoveEntries(string output)
-        {
-            var tokens = output.Split('\0');
-            for (var i = 0; i < tokens.Length; i++)
-            {
-                if (!tokens[i].StartsWith("2 "))
-                {
-                    continue;
-                }
-
-                var fields = tokens[i].Split(new[] { ' ' }, 10);
-                var oldPath = i + 1 < tokens.Length ? tokens[++i] : null;
-                if (fields.Length < 10 || fields[1].Length < 2 || fields[1][1] != 'R' || oldPath == null)
-                {
-                    continue;
-                }
-
-                yield return (fields[9], oldPath, int.TryParse(fields[8].Substring(1), out var score) ? score : 0);
-            }
-        }
-
         private static bool IsConfirmedMove((string Path, string OldPath, int Score) move,
-            List<(string Path, string OldPath, int Score)> moves)
+            List<(string Path, string OldPath, int Score)> moves,
+            Dictionary<string, (string OldPath, int Score)> byPath, HashSet<string> oldPaths)
         {
-            if (move.Path.EndsWith(".meta") && move.OldPath.EndsWith(".meta"))
+            if (move.Path.EndsWith(".meta", StringComparison.Ordinal) &&
+                move.OldPath.EndsWith(".meta", StringComparison.Ordinal))
             {
                 var asset = move.Path.Substring(0, move.Path.Length - ".meta".Length);
                 var oldAsset = move.OldPath.Substring(0, move.OldPath.Length - ".meta".Length);
-                return move.Score == 100 && moves.Any(other =>
-                    other.Path == asset && other.OldPath == oldAsset ||
-                    other.Path.StartsWith(asset + "/") && other.OldPath.StartsWith(oldAsset + "/"));
+                if (move.Score != 100)
+                {
+                    return false;
+                }
+
+                if (byPath.TryGetValue(asset, out var paired) && paired.OldPath == oldAsset)
+                {
+                    return true;
+                }
+
+                var prefix = asset + "/";
+                var oldPrefix = oldAsset + "/";
+                return moves.Any(other => other.Path.StartsWith(prefix, StringComparison.Ordinal) &&
+                                          other.OldPath.StartsWith(oldPrefix, StringComparison.Ordinal));
             }
 
             var meta = move.Path + ".meta";
             var oldMeta = move.OldPath + ".meta";
-            return moves.Any(other => other.Path == meta || other.OldPath == oldMeta)
-                ? moves.Any(other => other.Path == meta && other.OldPath == oldMeta && other.Score == 100)
-                : move.Score == 100;
+            if (!byPath.TryGetValue(meta, out var metaMove) && !oldPaths.Contains(oldMeta))
+            {
+                return move.Score == 100;
+            }
+
+            return metaMove.OldPath == oldMeta && metaMove.Score == 100;
         }
     }
 }

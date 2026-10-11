@@ -7,20 +7,17 @@ namespace Upwake.Vetka
 {
     internal partial class Git
     {
-        public List<GitBranch> Branches() => ReadBranches().Branches;
-
-        public (GitResult Result, List<GitBranch> Branches) ReadBranches()
+        public (GitResult Result, List<GitBranch> Branches) ReadBranches(bool track = true)
         {
             var result = Run("for-each-ref",
-                "--format=%(refname)%1f%(refname:lstrip=2)%1f%(upstream:short)%1f%(upstream:track)%1f%(HEAD)",
+                $"--format=%(refname)%1f%(refname:lstrip=2)%1f%(upstream:short)%1f{(track ? "%(upstream:track)" : "")}%1f%(HEAD)",
                 "refs/heads", "refs/remotes");
             if (!result.IsSuccess)
             {
                 return (result, new List<GitBranch>());
             }
 
-            return (result, result.Output
-                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+            return (result, Lines(result.Output)
                 .Select(line => line.Split(new[] { LogFieldSeparator }, StringSplitOptions.None))
                 .Where(fields => fields.Length == 5)
                 .Where(fields => !(fields[0].StartsWith("refs/remotes/") && fields[0].EndsWith("/HEAD")))
@@ -39,7 +36,7 @@ namespace Upwake.Vetka
             }
 
             const string prefix = "checkout: moving from ";
-            foreach (var line in result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+            foreach (var line in Lines(result.Output))
             {
                 if (!line.StartsWith(prefix))
                 {
@@ -65,37 +62,11 @@ namespace Upwake.Vetka
             return recent;
         }
 
-        public List<GitFileChange> CommitFiles(string commit)
+        public (GitResult Result, List<GitFileChange> Files) CommitFiles(string commit)
         {
-            var files = new List<GitFileChange>();
             var result = Run("show", "--diff-merges=first-parent", "--format=", "--name-status", "-z", "--no-renames",
                 commit);
-            if (!result.IsSuccess)
-            {
-                return files;
-            }
-
-            string status = null;
-            foreach (var token in result.Output.Split('\0'))
-            {
-                var value = token.Trim('\n', '\r');
-                if (value.Length == 0)
-                {
-                    continue;
-                }
-
-                if (status == null)
-                {
-                    status = value;
-                    continue;
-                }
-
-                files.Add(new GitFileChange(Git.ParseStatus(status.Substring(0, 1)), value));
-                status = null;
-            }
-
-            files.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path));
-            return files;
+            return (result, result.IsSuccess ? FileChanges(result.Output) : new List<GitFileChange>());
         }
 
         public (GitResult Result, List<GitBlameLine> Lines) Blame(string path, string revision = null)
@@ -155,7 +126,7 @@ namespace Upwake.Vetka
 
                     commits[hash] = info;
                     lines.Add(new GitBlameLine(hash, info.Author, info.Date, info.Summary, info.FileName, number,
-                        line.Substring(1), info.Previous, info.PreviousFileName));
+                        line.Substring(1).Replace("\t", "    "), info.Previous, info.PreviousFileName));
                     hash = null;
                     continue;
                 }
@@ -214,18 +185,11 @@ namespace Upwake.Vetka
             Run("show", "--diff-merges=first-parent", "--format=", "--no-color", "--no-ext-diff", commit, "--",
                 ":(top,literal)" + path);
 
-        public List<GitCommit> Log(int limit = 50) => ReadLog(limit).Commits;
-
-        public (GitResult Result, List<GitCommit> Commits) ReadLog(int limit = 50)
-        {
-            var page = ReadLogPage(null, 0, limit);
-            return (page.Result, page.Commits);
-        }
-
         internal int CommitsPerRead { get; set; } = 200;
 
         public (GitResult Result, List<string> Commits, List<string> Paths, HashSet<string> Unpushed,
-            Dictionary<string, HashSet<string>> Names) FileHistory(string head, string path, bool withMeta)
+            Dictionary<string, HashSet<string>> Names) FileHistory(string head, string path, bool withMeta,
+                bool followRenames = true)
         {
             var found = new List<(string Hash, long Time)>();
             var nameAt = new Dictionary<string, HashSet<string>>();
@@ -276,7 +240,7 @@ namespace Upwake.Vetka
 
                     nameAt[record.Hash].Add(name);
 
-                    if (record.Changes.Contains(("A", name)) && examined.Add((record.Hash, name)))
+                    if (followRenames && record.Changes.Contains(("A", name)) && examined.Add((record.Hash, name)))
                     {
                         added.Add(record.Hash);
                     }
@@ -326,59 +290,14 @@ namespace Upwake.Vetka
 
         private const int MaxRenamesFollowed = 100;
 
-        public (GitResult Result, List<string> Commits, List<string> Paths, HashSet<string> Unpushed,
-            Dictionary<string, HashSet<string>> Names) FolderHistory(string head, string folder, bool withMeta)
-        {
-            var names = withMeta ? new[] { folder, folder + ".meta" } : new[] { folder };
-            var walk = Run(new[]
-                {
-                    "log", "--full-history", "--simplify-merges", "--no-renames", "--diff-merges=first-parent",
-                    "--name-status", "-z", "--format=%x1e%H %ct %P", head
-                }
-                .Concat(PathFilter(names))
-                .ToArray());
-            if (!walk.IsSuccess)
-            {
-                return (walk, new List<string>(), names.ToList(), new HashSet<string>(), null);
-            }
-
-            var commits = HistoryRecords(walk.Output)
-                .Where(record => record.Parents.Length < 2 || record.Changes.Count > 0)
-                .Select(record => record.Hash)
-                .ToList();
-            var unpushed = new HashSet<string>();
-            if (string.IsNullOrWhiteSpace(RemoteRefs()))
-            {
-                unpushed.UnionWith(commits);
-            }
-            else
-            {
-                var outgoing = Run(new[] { "log", "--full-history", "--format=%H" }
-                    .Concat(OutgoingRange(PushTarget(), head))
-                    .Concat(PathFilter(names))
-                    .ToArray());
-                if (outgoing.IsSuccess)
-                {
-                    unpushed.UnionWith(Lines(outgoing.Output));
-                }
-            }
-
-            return (GitResult.Success(""), commits, names.ToList(), unpushed, null);
-        }
-
         private static IEnumerable<(string Hash, long Time, string[] Parents, List<(string Status, string Path)> Changes)>
             HistoryRecords(string output)
         {
             foreach (var record in output.Split(new[] { '\u001e' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                var fields = record.Split('\0').Select(field => field.Trim('\n', '\r')).ToList();
-                var header = fields[0].Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                var changes = new List<(string, string)>();
-                for (var i = 1; i + 1 < fields.Count; i += 2)
-                {
-                    changes.Add((fields[i], fields[i + 1]));
-                }
-
+                var fields = record.Split('\0');
+                var header = fields[0].Trim('\n', '\r').Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                var changes = NameStatus(fields, 1).Select(entry => (entry.Status, entry.Path)).ToList();
                 yield return (header[0], header.Length > 1 && long.TryParse(header[1], out var time) ? time : 0,
                     header.Skip(2).ToArray(), changes);
             }
@@ -386,11 +305,8 @@ namespace Upwake.Vetka
 
         private string RenameSource(string parent, string commit, string name)
         {
-            var deleted = Run("diff", "--name-only", "-z", "--no-renames", "--diff-filter=D", parent, commit);
-            var sources = deleted.IsSuccess
-                ? deleted.Output.Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries)
-                : Array.Empty<string>();
-            if (sources.Length == 0)
+            var sources = ChangedPaths("--diff-filter=D", parent, commit);
+            if (sources == null || sources.Count == 0)
             {
                 return null;
             }
@@ -448,23 +364,13 @@ namespace Upwake.Vetka
                 }
 
                 var found = (best.Status, best.Old);
-                var tokens = renames.Output.Split('\0');
-                for (var i = 0; i < tokens.Length;)
+                foreach (var entry in NameStatus(renames.Output.Split('\0')))
                 {
-                    var status = tokens[i].Trim('\n', '\r');
-                    if (!status.StartsWith("R") && !status.StartsWith("C"))
+                    if (entry.Status[0] == 'R' && entry.OldPath != null && entry.Path == path &&
+                        (found.Old == null || RenameScore(entry.Status) > RenameScore(found.Status)))
                     {
-                        i += 2;
-                        continue;
+                        found = (entry.Status, entry.OldPath);
                     }
-
-                    if (i + 2 < tokens.Length && status.StartsWith("R") && tokens[i + 2] == path &&
-                        (found.Old == null || RenameScore(status) > RenameScore(found.Status)))
-                    {
-                        found = (status, tokens[i + 1]);
-                    }
-
-                    i += 3;
                 }
 
                 if (found.Old != best.Old)
@@ -523,9 +429,6 @@ namespace Upwake.Vetka
                 : null;
         }
 
-        private static IEnumerable<string> Lines(string output) =>
-            output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-
         public (GitResult Result, List<GitCommit> Commits) ReadCommits(IReadOnlyList<string> hashes,
             ISet<string> unpushed)
         {
@@ -533,11 +436,8 @@ namespace Upwake.Vetka
             var commits = new List<GitCommit>();
             for (var start = 0; start < hashes.Count; start += CommitsPerRead)
             {
-                result = Run(new[]
-                    {
-                        "log", "--no-walk=unsorted", "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%D%x1f%s",
-                        "--decorate=short", "--decorate-refs=refs/tags/", "--date=short"
-                    }
+                result = Run(new[] { "log", "--no-walk=unsorted" }
+                    .Concat(CommitFormat)
                     .Concat(hashes.Skip(start).Take(CommitsPerRead))
                     .Append("--")
                     .ToArray());
@@ -546,11 +446,7 @@ namespace Upwake.Vetka
                     return (result, new List<GitCommit>());
                 }
 
-                commits.AddRange(Lines(result.Output)
-                    .Select(line => line.Split(new[] { LogFieldSeparator }, 6, StringSplitOptions.None))
-                    .Where(fields => fields.Length == 6)
-                    .Select(fields => new GitCommit(fields[1], fields[2], fields[3], fields[5],
-                        !unpushed.Contains(fields[0]), TagNames(fields[4]))));
+                commits.AddRange(ParseCommits(result.Output, unpushed));
             }
 
             return (result, commits);
@@ -562,20 +458,21 @@ namespace Upwake.Vetka
             return refs.IsSuccess ? refs.Output : null;
         }
 
+        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count) =>
+            ReadLogPage(head, skip, count, PushTarget());
+
         public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count,
-            string branchRef = null)
+            GitPushTarget? target)
         {
             var none = new List<GitCommit>();
             if (head == null)
             {
-                var resolved = Run("rev-parse", "-q", "--verify", "HEAD^{commit}");
-                if (!resolved.IsSuccess)
+                head = HeadCommit();
+                if (head == null)
                 {
                     var repository = Run("rev-parse", "--git-dir");
                     return (repository.IsSuccess ? GitResult.Success("") : repository, none, null);
                 }
-
-                head = resolved.Output;
             }
 
             var result = Run(new[] { "log", "--skip=" + skip, "-n", count.ToString() }
@@ -587,11 +484,11 @@ namespace Upwake.Vetka
                 return (result, none, head);
             }
 
-            var outgoing = new HashSet<string>(OutgoingCommitHashes(PushTargetOf(branchRef), head, skip + count));
+            var outgoing = new HashSet<string>(OutgoingCommitHashes(target, head, skip + count));
             return (result, ParseCommits(result.Output, outgoing), head);
         }
 
-        private GitPushTarget? PushTargetOf(string branchRef)
+        public GitPushTarget? PushTargetOf(string branchRef)
         {
             if (branchRef == null)
             {
@@ -605,16 +502,16 @@ namespace Upwake.Vetka
 
         private static readonly string[] CommitFormat =
         {
-            "--pretty=format:%h%x1f%an%x1f%ad%x1f%D%x1f%s", "--decorate=short", "--decorate-refs=refs/tags/",
+            "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%D%x1f%s", "--decorate=short", "--decorate-refs=refs/tags/",
             "--date=short"
         };
 
         private static List<GitCommit> ParseCommits(string output, ICollection<string> unpushed) =>
-            output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => line.Split(new[] { LogFieldSeparator }, 5, StringSplitOptions.None))
-                .Where(fields => fields.Length == 5)
-                .Select(fields => new GitCommit(fields[0], fields[1], fields[2], fields[4],
-                    !unpushed.Contains(fields[0]), TagNames(fields[3])))
+            Lines(output)
+                .Select(line => line.Split(new[] { LogFieldSeparator }, 6, StringSplitOptions.None))
+                .Where(fields => fields.Length == 6)
+                .Select(fields => new GitCommit(fields[1], fields[2], fields[3], fields[5],
+                    !unpushed.Contains(fields[0]), TagNames(fields[4])))
                 .ToList();
 
         public (GitResult Result, int Count, List<GitCommit> Commits) CommitsOnlyIn(string include, string exclude,
@@ -637,38 +534,36 @@ namespace Upwake.Vetka
                 : (log, 0, new List<GitCommit>());
         }
 
+        public GitComparison CompareWithWorkingTree(string reference, string name, int limit)
+        {
+            var comparison = new GitComparison { Current = CurrentBranch() ?? "HEAD", Tip = CommitOf(reference) };
+            if (comparison.Tip == null)
+            {
+                comparison.Result = GitResult.Failure($"{name} cannot be found");
+                return comparison;
+            }
+
+            var head = HeadCommit();
+            var onlyHere = CommitsOnlyIn(comparison.Tip, head, limit);
+            var onlyCurrent = head != null
+                ? CommitsOnlyIn(head, comparison.Tip, limit)
+                : (Result: GitResult.Success(""), Count: 0, Commits: new List<GitCommit>());
+            var files = DifferencesFromWorkingTree(comparison.Tip);
+            comparison.Result = !onlyHere.Result.IsSuccess ? onlyHere.Result
+                : !onlyCurrent.Result.IsSuccess ? onlyCurrent.Result
+                : files.Result;
+            comparison.OnlyHereCount = onlyHere.Count;
+            comparison.OnlyHere = onlyHere.Commits;
+            comparison.OnlyCurrentCount = onlyCurrent.Count;
+            comparison.OnlyCurrent = onlyCurrent.Commits;
+            comparison.Files = files.Files;
+            return comparison;
+        }
+
         public (GitResult Result, List<GitFileChange> Files) DifferencesFromWorkingTree(string revision)
         {
             var diff = Run("diff", "--name-status", "-z", "--find-renames", revision, "--");
-            var files = new List<GitFileChange>();
-            if (!diff.IsSuccess)
-            {
-                return (diff, files);
-            }
-
-            var tokens = diff.Output.Split('\0');
-            for (var i = 0; i + 1 < tokens.Length;)
-            {
-                var status = tokens[i].Trim('\n', '\r');
-                if (status.Length == 0)
-                {
-                    i++;
-                    continue;
-                }
-
-                if ((status[0] == 'R' || status[0] == 'C') && i + 2 < tokens.Length)
-                {
-                    files.Add(new GitFileChange(ParseStatus(status.Substring(0, 1)), tokens[i + 2], tokens[i + 1]));
-                    i += 3;
-                    continue;
-                }
-
-                files.Add(new GitFileChange(ParseStatus(status.Substring(0, 1)), tokens[i + 1]));
-                i += 2;
-            }
-
-            files.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path));
-            return (diff, files);
+            return (diff, diff.IsSuccess ? FileChanges(diff.Output) : new List<GitFileChange>());
         }
 
         private static List<string> TagNames(string decoration) =>
@@ -689,11 +584,7 @@ namespace Upwake.Vetka
             return unpushed.IsSuccess && unpushed.Output.Length == 0;
         }
 
-        public string HeadCommit()
-        {
-            var head = Run("rev-parse", "HEAD");
-            return head.IsSuccess ? head.Output : null;
-        }
+        public string HeadCommit() => CommitOf("HEAD");
 
         public string CommitOf(string reference)
         {
@@ -703,9 +594,8 @@ namespace Upwake.Vetka
 
         public HashSet<string> CommitsMissingFromHead(string tip, int limit)
         {
-            var hasHead = Run("rev-parse", "-q", "--verify", "HEAD").IsSuccess;
             var log = Run(new[] { "log", "--format=%h", "-n", limit.ToString(), tip }
-                .Concat(hasHead ? new[] { "--not", "HEAD" } : Array.Empty<string>())
+                .Concat(HasHead() ? new[] { "--not", "HEAD" } : Array.Empty<string>())
                 .Append("--")
                 .ToArray());
             return new HashSet<string>(log.IsSuccess ? Lines(log.Output) : Enumerable.Empty<string>());
@@ -766,26 +656,32 @@ namespace Upwake.Vetka
         private GitResult? HeadMoved(string expected)
         {
             var heads = Run("rev-parse", "HEAD", $"{expected}^{{commit}}");
-            var lines = heads.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            return heads.IsSuccess && lines.Length == 2 && lines[0] == lines[1]
+            var lines = Lines(heads.Output);
+            return heads.IsSuccess && lines.Count == 2 && lines[0] == lines[1]
                 ? (GitResult?)null
                 : GitResult.Failure($"The last commit is not {expected} any more, refresh and try again");
         }
 
-        public List<string> OutgoingCommits(int limit = 50)
+        public (GitResult Result, int Count, List<string> Commits) OutgoingCommits(GitPushTarget? target, int limit = 50)
         {
-            var result = OutgoingLog("--pretty=format:%h %s", limit, "HEAD", PushTarget());
-            return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
-                ? new List<string>()
-                : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+            var log = OutgoingLog("--pretty=format:%h %s", limit, "HEAD", target);
+            if (!log.IsSuccess)
+            {
+                return (HasHead() ? log : GitResult.Success(""), 0, new List<string>());
+            }
+
+            var commits = Lines(log.Output);
+            var count = commits.Count < limit ? commits.Count
+                : CountCommits(OutgoingRange(target, "HEAD").ToArray()) ?? commits.Count;
+            return (log, count, commits);
         }
 
         private IEnumerable<string> OutgoingCommitHashes(GitPushTarget? target, string tip, int limit)
         {
-            var result = OutgoingLog("--pretty=format:%h", limit, tip, target);
+            var result = OutgoingLog("--pretty=format:%H", limit, tip, target);
             return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
                 ? Enumerable.Empty<string>()
-                : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                : Lines(result.Output);
         }
 
         private GitResult OutgoingLog(string format, int limit, string tip, GitPushTarget? target) =>

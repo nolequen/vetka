@@ -11,29 +11,29 @@ namespace Upwake.Vetka
     {
         private static readonly TimeSpan Expiry = TimeSpan.FromDays(30);
 
+        [Serializable]
+        private class Mark
+        {
+            public string Path;
+            public bool Checked;
+            public long MissingSince;
+        }
+
+        [SerializeField] private List<Mark> _marks = new List<Mark>();
         [SerializeField] private List<string> _checked = new List<string>();
         [SerializeField] private List<string> _unchecked = new List<string>();
-        [SerializeField] private List<string> _missing = new List<string>();
-        [SerializeField] private List<long> _missingSince = new List<long>();
 
-        private HashSet<string> _checkedSet;
-        private HashSet<string> _uncheckedSet;
-        private Dictionary<string, long> _missingTimes;
+        private Dictionary<string, Mark> _byPath;
 
-        public bool IsChecked(string path, bool byDefault)
-        {
-            EnsureSets();
-            return _checkedSet.Contains(path) || byDefault && !_uncheckedSet.Contains(path);
-        }
+        public bool IsChecked(string path, bool byDefault) =>
+            Marks().TryGetValue(path, out var mark) ? mark.Checked : byDefault;
 
         public void Set(IEnumerable<string> paths, bool value)
         {
-            EnsureSets();
+            var marks = Marks();
             foreach (var path in paths)
             {
-                (value ? _checkedSet : _uncheckedSet).Add(path);
-                (value ? _uncheckedSet : _checkedSet).Remove(path);
-                _missingTimes.Remove(path);
+                marks[path] = new Mark { Path = path, Checked = value };
             }
 
             Store();
@@ -41,15 +41,14 @@ namespace Upwake.Vetka
 
         public void Forget(IEnumerable<string> paths)
         {
-            EnsureSets();
-            var removed = 0;
+            var marks = Marks();
+            var removed = false;
             foreach (var path in paths)
             {
-                removed += (_checkedSet.Remove(path) ? 1 : 0) + (_uncheckedSet.Remove(path) ? 1 : 0);
-                _missingTimes.Remove(path);
+                removed |= marks.Remove(path);
             }
 
-            if (removed > 0)
+            if (removed)
             {
                 Store();
             }
@@ -57,24 +56,23 @@ namespace Upwake.Vetka
 
         public void Retain(ICollection<string> present, DateTime now)
         {
-            EnsureSets();
+            var marks = Marks();
             var changed = false;
-            foreach (var path in _checkedSet.Concat(_uncheckedSet).ToList())
+            foreach (var mark in marks.Values.ToList())
             {
-                if (present.Contains(path))
+                if (present.Contains(mark.Path))
                 {
-                    changed |= _missingTimes.Remove(path);
+                    changed |= mark.MissingSince != 0;
+                    mark.MissingSince = 0;
                 }
-                else if (!_missingTimes.TryGetValue(path, out var since))
+                else if (mark.MissingSince == 0)
                 {
-                    _missingTimes[path] = now.Ticks;
+                    mark.MissingSince = now.Ticks;
                     changed = true;
                 }
-                else if (now.Ticks - since > Expiry.Ticks)
+                else if (now.Ticks - mark.MissingSince > Expiry.Ticks)
                 {
-                    _checkedSet.Remove(path);
-                    _uncheckedSet.Remove(path);
-                    _missingTimes.Remove(path);
+                    marks.Remove(mark.Path);
                     changed = true;
                 }
             }
@@ -85,27 +83,37 @@ namespace Upwake.Vetka
             }
         }
 
-        private void EnsureSets()
+        private Dictionary<string, Mark> Marks()
         {
-            _checkedSet ??= new HashSet<string>(_checked);
-            _uncheckedSet ??= new HashSet<string>(_unchecked);
-            if (_missingTimes == null)
+            if (_byPath != null)
             {
-                _missingTimes = new Dictionary<string, long>();
-                for (var i = 0; i < _missing.Count && i < _missingSince.Count; i++)
-                {
-                    _missingTimes[_missing[i]] = _missingSince[i];
-                }
+                return _byPath;
             }
+
+            _byPath = new Dictionary<string, Mark>();
+            foreach (var path in _checked)
+            {
+                _byPath[path] = new Mark { Path = path, Checked = true };
+            }
+
+            foreach (var path in _unchecked)
+            {
+                _byPath[path] = new Mark { Path = path };
+            }
+
+            foreach (var mark in _marks.Where(mark => !string.IsNullOrEmpty(mark?.Path)))
+            {
+                _byPath[mark.Path] = mark;
+            }
+
+            return _byPath;
         }
 
         private void Store()
         {
-            _checked = _checkedSet.OrderBy(path => path).ToList();
-            _unchecked = _uncheckedSet.OrderBy(path => path).ToList();
-            var missing = _missingTimes.OrderBy(entry => entry.Key).ToList();
-            _missing = missing.Select(entry => entry.Key).ToList();
-            _missingSince = missing.Select(entry => entry.Value).ToList();
+            _marks = _byPath.Values.OrderBy(mark => mark.Path).ToList();
+            _checked.Clear();
+            _unchecked.Clear();
             Save(true);
         }
     }

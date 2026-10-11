@@ -17,19 +17,17 @@ namespace Upwake.Vetka
         [NonSerialized] private bool _loading;
         [NonSerialized] private bool _busy;
         [NonSerialized] private string _aborted;
+        [NonSerialized] private int _generation = -1;
 
-        private static GUIStyle _hintStyle;
-
-        private static GUIStyle HintStyle => _hintStyle ??= new GUIStyle(GUI.skin.label)
+        private static readonly SkinStyle HintStyle = new SkinStyle(() => new GUIStyle(GUI.skin.label)
         {
             normal = { textColor = Color.gray },
             padding = new RectOffset(4, 0, 0, 0)
-        };
+        });
 
-        public static void ShowWindow(Git git)
+        public static void ShowWindow()
         {
             var window = GetWindow<StashWindow>(utility: false, "Git stash");
-            window._git = git;
             window.minSize = new Vector2(460, 280);
             window.Refresh();
         }
@@ -38,7 +36,13 @@ namespace Upwake.Vetka
 
         private void OnDisable() => GitOperations.RepositoryChanged -= Refresh;
 
-        private void OnFocus() => Refresh();
+        private void OnFocus()
+        {
+            if (_generation != GitOperations.Generation)
+            {
+                Refresh();
+            }
+        }
 
         private void Refresh()
         {
@@ -50,6 +54,7 @@ namespace Upwake.Vetka
             _git ??= new Git();
             _loading = true;
             _aborted = null;
+            _generation = GitOperations.Generation;
 
             var git = _git;
             GitOperations.Read("Git: reading stashes", () => git.StashList(), list =>
@@ -64,6 +69,7 @@ namespace Upwake.Vetka
                     _loading = false;
                     _stashes = null;
                     _aborted = list.Result.Message;
+                    _generation = -1;
                     Repaint();
                     return;
                 }
@@ -85,6 +91,7 @@ namespace Upwake.Vetka
 
                 _loading = false;
                 _aborted = _stashes == null ? reason : null;
+                _generation = -1;
                 Repaint();
             });
         }
@@ -117,6 +124,7 @@ namespace Upwake.Vetka
             }
 
             _message = EditorGUILayout.TextField(_message);
+            var field = GUILayoutUtility.GetLastRect();
             using (new EditorGUI.DisabledScope(_loading || _busy))
             {
                 if (GUILayout.Button("Stash", GUILayout.Width(80)))
@@ -129,9 +137,7 @@ namespace Upwake.Vetka
 
             if (string.IsNullOrEmpty(_message))
             {
-                var rect = GUILayoutUtility.GetLastRect();
-                rect.width -= 84;
-                GUI.Label(rect, "Stash message (optional)", HintStyle);
+                GUI.Label(field, "Stash message (optional)", HintStyle);
             }
 
             _includeUntracked = EditorGUILayout.ToggleLeft("Include unversioned files", _includeUntracked);
@@ -235,12 +241,10 @@ namespace Upwake.Vetka
                         _message = "";
                         _pendingMessage = "";
                     }
-
-                    Refresh();
                 }
 
                 Notification.Show(result);
-            }, refreshAssets: true, prepare: UnsavedChanges.SaveOrCancel);
+            }, changesTree: true);
         }
 
         private void Apply(GitStash stash, bool drop)
@@ -255,8 +259,7 @@ namespace Upwake.Vetka
                 drop ? $"Git: popping {stash.Reference}" : $"Git: applying {stash.Reference}",
                 () => git.ApplyStash(stash, drop),
                 OnCompleted,
-                refreshAssets: true,
-                prepare: UnsavedChanges.SaveOrCancel
+                changesTree: true
             );
         }
 
@@ -282,7 +285,6 @@ namespace Upwake.Vetka
             if (this)
             {
                 _busy = false;
-                Refresh();
             }
 
             Notification.Show(result);

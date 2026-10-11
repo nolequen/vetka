@@ -1,4 +1,3 @@
-using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -26,8 +25,7 @@ namespace Upwake.Vetka
                 return;
             }
 
-            var project = Directory.GetParent(Application.dataPath)?.FullName;
-            if (BranchTitle.FindHead(project) == null || ChangesWindow.DockTargets().Length == 0)
+            if (!BranchTitle.InRepository || ChangesWindow.DockTargets().Length == 0)
             {
                 return;
             }

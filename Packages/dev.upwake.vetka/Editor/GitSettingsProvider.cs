@@ -125,18 +125,14 @@ namespace Upwake.Vetka
         private static void SetGitPath(string path)
         {
             GitSettings.GitPath = path;
-            BranchTitle.Refresh();
             ProjectStatus.Refresh();
         }
 
         private static void DrawOptions()
         {
-            var strategy = (UpdateStrategy)EditorGUILayout.EnumPopup(Styles.UpdateStrategy,
-                GitSettings.UpdateStrategyValue);
-            if (strategy != GitSettings.UpdateStrategyValue)
-            {
-                GitSettings.UpdateStrategyValue = strategy;
-            }
+            var settings = GitProjectSettings.instance;
+            settings.UpdateStrategy =
+                (UpdateStrategyChoice)EditorGUILayout.EnumPopup(Styles.UpdateStrategy, settings.UpdateStrategy);
 
             var showBranch = EditorGUILayout.Toggle(Styles.ShowBranchInTitle, GitSettings.ShowBranchInTitle);
             if (showBranch != GitSettings.ShowBranchInTitle)

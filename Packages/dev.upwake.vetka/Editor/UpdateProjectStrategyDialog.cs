@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -13,39 +12,21 @@ namespace Upwake.Vetka
             { UpdateStrategy.Rebase, "Rebase the current branch on top of the remote branch" }
         };
 
-        private Action<UpdateStrategy, bool> _onClose;
         private UpdateStrategy _selected;
         private bool _remember;
-        [NonSerialized] private bool _closing;
+        private (UpdateStrategy Strategy, bool Remember)? _answer;
 
-        public static void Show(Action<UpdateStrategy, bool> callback)
+        public static (UpdateStrategy Strategy, bool Remember)? Ask()
         {
             var window = CreateInstance<UpdateProjectStrategyDialog>();
-            window.titleContent = new GUIContent("Update Project");
-            window._onClose = callback;
-
-            var size = new Vector2(350, 100);
-            var main = EditorGUIUtility.GetMainWindowPosition();
-            window.position = new Rect(main.center - size / 2, size);
-            window.minSize = size;
-            window.maxSize = size;
-
-            window.ShowUtility();
-            window.Focus();
+            return ModalDialog.Show(window, "Update Project", new Vector2(350, 100)) ? window._answer : null;
         }
 
         private void OnGUI()
         {
-            if (_onClose == null)
-            {
-                CloseLater();
-                return;
-            }
-
             var current = Event.current;
-            var submit = current.type == EventType.KeyDown &&
-                         (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter);
-            var cancel = current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape;
+            var submit = ModalDialog.Submitted(current);
+            var cancel = ModalDialog.Cancelled(current);
 
             foreach (var option in _options)
             {
@@ -62,38 +43,16 @@ namespace Upwake.Vetka
 
             if (GUILayout.Button("OK") || submit)
             {
-                var callback = _onClose;
-                var selected = _selected;
-                var remember = _remember;
-                _onClose = null;
-                EditorApplication.delayCall += () => callback(selected, remember);
-                CloseLater();
+                _answer = (_selected, _remember);
+                ModalDialog.Close(this);
             }
 
             if (GUILayout.Button("Cancel") || cancel)
             {
-                _onClose = null;
-                CloseLater();
+                ModalDialog.Close(this);
             }
 
             EditorGUILayout.EndHorizontal();
-        }
-
-        private void CloseLater()
-        {
-            if (_closing)
-            {
-                return;
-            }
-
-            _closing = true;
-            EditorApplication.delayCall += () =>
-            {
-                if (this != null)
-                {
-                    Close();
-                }
-            };
         }
     }
 }
