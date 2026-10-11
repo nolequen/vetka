@@ -7,61 +7,6 @@ namespace Upwake.Vetka
 {
     internal partial class Git
     {
-        public (GitResult Result, List<GitBranch> Branches) ReadBranches(bool track = true)
-        {
-            var result = Run("for-each-ref",
-                $"--format=%(refname)%1f%(refname:lstrip=2)%1f%(upstream:short)%1f{(track ? "%(upstream:track)" : "")}%1f%(HEAD)",
-                "refs/heads", "refs/remotes");
-            if (!result.IsSuccess)
-            {
-                return (result, new List<GitBranch>());
-            }
-
-            return (result, Lines(result.Output)
-                .Select(line => line.Split(new[] { LogFieldSeparator }, StringSplitOptions.None))
-                .Where(fields => fields.Length == 5)
-                .Where(fields => !(fields[0].StartsWith("refs/remotes/") && fields[0].EndsWith("/HEAD")))
-                .Select(fields => new GitBranch(fields[1], fields[0].StartsWith("refs/remotes/"),
-                    fields[4].Trim() == "*", fields[2], fields[3], fields[0]))
-                .ToList());
-        }
-
-        public List<string> RecentBranches()
-        {
-            var result = Run("reflog", "--format=%gs", "-n", "300");
-            var recent = new List<string>();
-            if (!result.IsSuccess)
-            {
-                return recent;
-            }
-
-            const string prefix = "checkout: moving from ";
-            foreach (var line in Lines(result.Output))
-            {
-                if (!line.StartsWith(prefix))
-                {
-                    continue;
-                }
-
-                var move = line.Substring(prefix.Length);
-                var separator = move.LastIndexOf(" to ", StringComparison.Ordinal);
-                if (separator < 0)
-                {
-                    continue;
-                }
-
-                foreach (var name in new[] { move.Substring(separator + " to ".Length), move.Substring(0, separator) })
-                {
-                    if (!recent.Contains(name))
-                    {
-                        recent.Add(name);
-                    }
-                }
-            }
-
-            return recent;
-        }
-
         public (GitResult Result, List<GitFileChange> Files) CommitFiles(string commit)
         {
             var result = Run("show", "--diff-merges=first-parent", "--format=", "--name-status", "-z", "--no-renames",
@@ -584,14 +529,6 @@ namespace Upwake.Vetka
             return unpushed.IsSuccess && unpushed.Output.Length == 0;
         }
 
-        public string HeadCommit() => CommitOf("HEAD");
-
-        public string CommitOf(string reference)
-        {
-            var commit = Run("rev-parse", "-q", "--verify", reference + "^{commit}");
-            return commit.IsSuccess ? commit.Output : null;
-        }
-
         public HashSet<string> CommitsMissingFromHead(string tip, int limit)
         {
             var log = Run(new[] { "log", "--format=%h", "-n", limit.ToString(), tip }
@@ -688,9 +625,6 @@ namespace Upwake.Vetka
             Run(new[] { "log" }.Concat(OutgoingRange(target, tip))
                 .Concat(new[] { format, "-n", limit.ToString(), "--" })
                 .ToArray());
-
-        private static IEnumerable<string> PathFilter(IEnumerable<string> paths) =>
-            new[] { "--" }.Concat(paths.Select(path => ":(top,literal)" + path));
 
         private static IEnumerable<string> OutgoingRange(GitPushTarget? target, string tip)
         {

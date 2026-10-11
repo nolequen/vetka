@@ -1,8 +1,10 @@
-using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Text;
+using System;
+using UnityEngine;
 
 namespace Upwake.Vetka
 {
@@ -363,5 +365,195 @@ namespace Upwake.Vetka
 
             return GitResult.Failure(text.ToString().TrimEnd());
         }
+
+        private List<string> Stuck(string stash, IEnumerable<string> changed, DateTime pushed)
+        {
+            var paths = changed.ToList();
+            var inStash = new HashSet<string>(StashPaths(stash) ?? paths, StringComparer.Ordinal);
+            var saved = SavedAfter(paths, pushed);
+            return paths.Where(path => inStash.Contains(path) && !saved.Contains(path))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        private HashSet<string> SavedAfter(IEnumerable<string> paths, DateTime time)
+        {
+            var saved = new HashSet<string>(StringComparer.Ordinal);
+            var top = TopLevel();
+            if (!top.IsSuccess)
+            {
+                return saved;
+            }
+
+            var root = top.Output;
+            foreach (var path in paths)
+            {
+                var file = Path.Combine(root, path);
+                if (File.Exists(file) && File.GetLastWriteTimeUtc(file) > time)
+                {
+                    saved.Add(path);
+                }
+            }
+
+            return saved;
+        }
+
+        private string StashHead() => Run("rev-parse", "-q", "--verify", "refs/stash").Output;
+
+        private string OwnStash(string before, string message, string head)
+        {
+            foreach (var entry in Stashes())
+            {
+                if (entry.Hash == before)
+                {
+                    return null;
+                }
+
+                if (message != null && !IsStashMessage(entry, message))
+                {
+                    continue;
+                }
+
+                var parent = Run("rev-parse", "-q", "--verify", entry.Hash + "^1");
+                if (parent.IsSuccess && parent.Output == head)
+                {
+                    return entry.Hash;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsStashMessage(GitStash entry, string message) =>
+            entry.Message.EndsWith(": " + string.Join(" ",
+                message.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)),
+                StringComparison.Ordinal);
+
+        private const string InterruptionMarker = "vetka-interrupted";
+
+        private static readonly TimeSpan PendingMarkerAge = TimeSpan.FromMinutes(10);
+
+        private string InterruptionMarkerPath() => GitDirPath(InterruptionMarker);
+
+        private void RememberInterruption(string description, string stash, string stashMessage)
+        {
+            var path = InterruptionMarkerPath();
+            if (path == null)
+            {
+                return;
+            }
+
+            try
+            {
+                File.WriteAllText(path,
+                    $"{description}\n{stash}\n{DateTime.Now:yyyy-MM-dd HH:mm}\n{stashMessage}\n", Utf8);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Vetka: cannot write {path}: {exception.Message}");
+            }
+        }
+
+        private void ForgetInterruption()
+        {
+            var path = InterruptionMarkerPath();
+            if (path != null && File.Exists(path))
+            {
+                DeleteTempFile(path);
+            }
+        }
+
+        public (GitInterruption? Found, bool Pending) Interruption()
+        {
+            var path = InterruptionMarkerPath();
+            if (path == null || !File.Exists(path))
+            {
+                return (null, false);
+            }
+
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(path, Utf8);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Vetka: cannot read {path}: {exception.Message}");
+                return (null, File.Exists(path));
+            }
+
+            if (lines.Length < 2)
+            {
+                DeleteTempFile(path);
+                return (null, File.Exists(path));
+            }
+
+            var (list, stashes) = StashList();
+            if (!list.IsSuccess)
+            {
+                return (null, File.Exists(path));
+            }
+
+            var hash = lines[1];
+            var message = lines.Length > 3 ? lines[3] : "";
+            var stash = stashes.FirstOrDefault(current => hash.Length > 0
+                ? current.Hash == hash
+                : message.Length > 0 && IsStashMessage(current, message));
+            if (stash.Reference == null)
+            {
+                if (hash.Length > 0 || DateTime.UtcNow - File.GetLastWriteTimeUtc(path) > PendingMarkerAge)
+                {
+                    DeleteTempFile(path);
+                }
+
+                return (null, File.Exists(path));
+            }
+
+            return (new GitInterruption(lines[0], lines.Length > 2 ? lines[2] : "", stash.Reference, stash.Message,
+                OperationInProgress().Name, path), true);
+        }
+
+        public static void DismissInterruption(GitInterruption found) => DeleteTempFile(found.MarkerPath);
+
+        private GitResult DropStashEntry(string stash)
+        {
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var reference = StashReference(stash);
+                if (reference == null)
+                {
+                    return GitResult.Success("");
+                }
+
+                var drop = Run("stash", "drop", reference);
+                var dropped = Regex.Match(drop.Output, @"\(([0-9a-f]{40,64})\)\s*$");
+                if (!drop.IsSuccess || !dropped.Success || dropped.Groups[1].Value == stash)
+                {
+                    return drop;
+                }
+
+                var other = dropped.Groups[1].Value;
+                var subject = Run("log", "-1", "--format=%s", other);
+                var stored = Run("stash", "store", "-m",
+                    subject.IsSuccess && subject.Output.Length > 0 ? subject.Output : "Stash entry", other);
+                if (!stored.IsSuccess)
+                {
+                    return GitResult.Failure("Another stash entry was dropped by mistake, " +
+                                             $"restore it with git stash store {other}\n{stored.Message}");
+                }
+            }
+
+            return GitResult.Failure("The stash entry could not be dropped, the stash list kept changing");
+        }
+
+        private string StashKept(string stash)
+        {
+            var reference = StashReference(stash);
+            return reference == null || reference == "stash@{0}"
+                ? StashKeptText
+                : $"Local changes are kept in the stash as {reference}, restore them with git stash pop {reference}";
+        }
+
+        private const string StashKeptText = "Local changes are kept in the stash, restore them with git stash pop";
     }
 }

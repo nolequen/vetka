@@ -276,29 +276,6 @@ namespace Upwake.Vetka
             .Select(match => match.Groups[1].Value)
             .ToList();
 
-        public string CurrentBranch() => CurrentBranch(out _);
-
-        public string CurrentBranch(out GitResult error)
-        {
-            const string branches = "refs/heads/";
-            var head = Run("symbolic-ref", "-q", "HEAD");
-            error = head;
-            if (head.IsSuccess)
-            {
-                return head.Output.StartsWith(branches) ? head.Output.Substring(branches.Length) : head.Output;
-            }
-
-            return head.ExitCode == 1 ? "HEAD" : null;
-        }
-
-        public string UpstreamBranch() => UpstreamBranch(out _);
-
-        private string UpstreamBranch(out GitResult error)
-        {
-            error = Run("rev-parse", "--abbrev-ref", "@{u}");
-            return error.IsSuccess ? error.Output : null;
-        }
-
         internal int ReportedRefs { get; set; } = 20;
 
         private const string RemoteBranchRefs = "refs/remotes/";

@@ -1,9 +1,10 @@
-using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using UnityEngine;
+using System.Text;
+using System;
 using Debug = UnityEngine.Debug;
+using UnityEngine;
 
 namespace Upwake.Vetka
 {
@@ -256,5 +257,128 @@ namespace Upwake.Vetka
                 _ => GitStatus.Unknown
             };
         }
+
+        private static readonly (string Path, string Name)[] OperationsInProgress =
+        {
+            ("MERGE_HEAD", "a merge"),
+            ("CHERRY_PICK_HEAD", "a cherry-pick"),
+            ("REVERT_HEAD", "a revert"),
+            ("rebase-merge", "a rebase"),
+            ("rebase-apply", "a rebase")
+        };
+
+        private GitResult? RefuseDuringOperation(string description, string allowed = null)
+        {
+            var (state, inProgress) = OperationInProgress();
+            if (!state.IsSuccess)
+            {
+                return state;
+            }
+
+            return inProgress == null || inProgress == allowed
+                ? (GitResult?)null
+                : GitResult.Failure(
+                    $"{description} is not possible while {inProgress} is in progress, finish or abort it first");
+        }
+
+        private (GitResult State, string Name) OperationInProgress()
+        {
+            var arguments = new List<string> { "rev-parse" };
+            foreach (var operation in OperationsInProgress)
+            {
+                arguments.Add("--git-path");
+                arguments.Add(operation.Path);
+            }
+
+            var paths = Run(arguments.ToArray());
+            if (!paths.IsSuccess)
+            {
+                return (paths, null);
+            }
+
+            var lines = Lines(paths.Output);
+            for (var i = 0; i < OperationsInProgress.Length && i < lines.Count; i++)
+            {
+                var path = Path.GetFullPath(Path.Combine(_projectRoot, lines[i]));
+                if (File.Exists(path) || Directory.Exists(path))
+                {
+                    return (paths, OperationsInProgress[i].Name);
+                }
+            }
+
+            return (paths, null);
+        }
+
+        private List<string> Conflicts() => NulSeparated(Run("diff", "--name-only", "-z", "--diff-filter=U").Output);
+
+        private const string StagingKept =
+            "The staged version could not be restored, it is kept in the stash, see git stash list";
+
+        private const string InUseHint =
+            "Close the programs that use them and try again, a native plugin loaded by Unity needs an editor restart";
+
+        private const string UnwrittenHint =
+            "Check the free disk space and the folder permissions, for Git LFS files check the connection to the LFS server";
+
+        private const string ModifiedHint =
+            "Git sees them as changed because of their line endings or Git LFS settings, " +
+            "commit them as they are or run git add --renormalize .";
+
+        private const string StuckHint = ModifiedHint + " and try again";
+
+        private static string ConflictList(List<string> conflicts) => FileList("Conflicts", conflicts);
+
+        private static string FileList(string title, IEnumerable<string> files)
+        {
+            var all = files.ToList();
+            var list = new StringBuilder(title + ":");
+            foreach (var file in all.Take(10))
+            {
+                list.Append("\n  ").Append(file);
+            }
+
+            if (all.Count > 10)
+            {
+                list.Append($"\n  and {all.Count - 10} more");
+            }
+
+            return list.ToString();
+        }
+
+        public string HeadCommit() => CommitOf("HEAD");
+
+        public string CommitOf(string reference)
+        {
+            var commit = Run("rev-parse", "-q", "--verify", reference + "^{commit}");
+            return commit.IsSuccess ? commit.Output : null;
+        }
+
+        private static IEnumerable<string> PathFilter(IEnumerable<string> paths) =>
+            new[] { "--" }.Concat(paths.Select(path => ":(top,literal)" + path));
+
+        public string CurrentBranch() => CurrentBranch(out _);
+
+        public string CurrentBranch(out GitResult error)
+        {
+            const string branches = "refs/heads/";
+            var head = Run("symbolic-ref", "-q", "HEAD");
+            error = head;
+            if (head.IsSuccess)
+            {
+                return head.Output.StartsWith(branches) ? head.Output.Substring(branches.Length) : head.Output;
+            }
+
+            return head.ExitCode == 1 ? "HEAD" : null;
+        }
+
+        public string UpstreamBranch() => UpstreamBranch(out _);
+
+        private string UpstreamBranch(out GitResult error)
+        {
+            error = Run("rev-parse", "--abbrev-ref", "@{u}");
+            return error.IsSuccess ? error.Output : null;
+        }
+
+        private bool HasHead() => Run("rev-parse", "-q", "--verify", "HEAD").IsSuccess;
     }
 }

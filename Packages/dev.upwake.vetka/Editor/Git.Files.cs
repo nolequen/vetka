@@ -398,8 +398,6 @@ namespace Upwake.Vetka
             }
         }
 
-        private bool HasHead() => Run("rev-parse", "-q", "--verify", "HEAD").IsSuccess;
-
         private GitResult? RestoreFromHead(List<string> paths, params string[] targets) =>
             Restore("HEAD", paths, targets);
 
