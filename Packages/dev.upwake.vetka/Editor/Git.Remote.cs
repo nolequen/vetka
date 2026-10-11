@@ -307,6 +307,89 @@ namespace Upwake.Vetka
             return result.IsSuccess ? result.Output : null;
         }
 
+        internal static int ReportedRefs { get; set; } = 20;
+
+        private const string RemoteBranchRefs = "refs/remotes/";
+
+        private const string TagRefs = "refs/tags/";
+
+        private Dictionary<string, string> FetchedRefs()
+        {
+            var refs = Run("for-each-ref", "--format=%(refname) %(objectname) %(symref)", RemoteBranchRefs, TagRefs);
+            if (!refs.IsSuccess)
+            {
+                return null;
+            }
+
+            return refs.Output
+                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Split(' '))
+                .Where(fields => fields.Length == 2 || fields.Length == 3 && fields[2].Length == 0)
+                .ToDictionary(fields => fields[0], fields => fields[1], StringComparer.Ordinal);
+        }
+
+        private string FetchReport(Dictionary<string, string> before, Dictionary<string, string> after,
+            string upstream)
+        {
+            if (before == null || after == null)
+            {
+                return "";
+            }
+
+            int Order(string name)
+            {
+                var tag = name.StartsWith(TagRefs, StringComparison.Ordinal);
+                var kind = !before.ContainsKey(name) ? 1 : !after.ContainsKey(name) ? 2 : 0;
+                return name == RemoteBranchRefs + upstream || name == "refs/" + upstream ? 0 : (tag ? 4 : 1) + kind;
+            }
+
+            var changed = before.Keys.Union(after.Keys)
+                .Where(name => !before.TryGetValue(name, out var old) || !after.TryGetValue(name, out var now) ||
+                               old != now)
+                .OrderBy(Order)
+                .ThenBy(name => name, StringComparer.Ordinal)
+                .ToList();
+            var lines = changed.Take(ReportedRefs).Select(name => "  " + RefChange(name, before, after)).ToList();
+            if (changed.Count > ReportedRefs)
+            {
+                lines.Add($"  and {changed.Count - ReportedRefs} more");
+            }
+
+            return string.Join("\n", lines);
+        }
+
+        private string RefChange(string name, Dictionary<string, string> before, Dictionary<string, string> after)
+        {
+            var tag = name.StartsWith(TagRefs, StringComparison.Ordinal);
+            var shown = name.Substring(tag ? TagRefs.Length : RemoteBranchRefs.Length);
+            if (!before.TryGetValue(name, out var old))
+            {
+                return $"{shown}: {(tag ? "new tag" : "new branch")}";
+            }
+
+            if (!after.TryGetValue(name, out var now))
+            {
+                return $"{shown}: {(tag ? "tag deleted, the remote does not have it" : "deleted on the remote")}";
+            }
+
+            if (tag)
+            {
+                return $"{shown}: tag moved";
+            }
+
+            var counts = Run("rev-list", "--left-right", "--count", $"{old}...{now}");
+            var fields = counts.IsSuccess ? counts.Output.Split('\t') : Array.Empty<string>();
+            if (fields.Length != 2 || !int.TryParse(fields[0], out var removed) ||
+                !int.TryParse(fields[1], out var added) || removed == 0 && added == 0)
+            {
+                return $"{shown}: updated";
+            }
+
+            return removed == 0 ? $"{shown}: {Counted(added, "new commit")}"
+                : added == 0 ? $"{shown}: {Counted(removed, "commit")} removed on the remote"
+                : $"{shown}: rewritten on the remote, {Counted(added, "new commit")}, {removed} removed";
+        }
+
         public GitIdentity Identity(bool global)
         {
             var identities = Identities();

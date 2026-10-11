@@ -31,12 +31,14 @@ namespace Upwake.Vetka
                 return GitResult.Failure("Cannot update: no branch is checked out");
             }
 
+            var before = FetchedRefs();
             var fetch = Interruptible("Update", Fetch);
             if (!fetch.IsSuccess)
             {
                 return fetch;
             }
 
+            var after = before == null ? null : FetchedRefs();
             var upstream = UpstreamBranch();
             if (string.IsNullOrEmpty(upstream))
             {
@@ -46,7 +48,9 @@ namespace Upwake.Vetka
                     : $"Branch {branch} has no upstream to update from");
             }
 
-            return Integrate(strategy, upstream);
+            var integrated = Integrate(strategy, upstream);
+            var report = integrated.IsSuccess ? FetchReport(before, after, upstream) : "";
+            return report.Length > 0 ? GitResult.Success($"{integrated.Message}\n{report}") : integrated;
         }
 
         public GitResult UpdateAndPush(UpdateStrategy strategy, PushTags? tags = null)

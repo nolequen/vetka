@@ -926,10 +926,145 @@ namespace Upwake.Vetka.Tests
             var result = local.Git.UpdateProject(UpdateStrategy.Merge);
 
             Assert.IsTrue(result.IsSuccess, result.Message);
-            Assert.AreEqual("Merged 1 commit from origin/main, local changes restored", result.Message);
+            Assert.AreEqual("Merged 1 commit from origin/main, local changes restored\n  origin/main: 1 new commit",
+                result.Message);
             Assert.AreEqual("theirs\n", local.Read("f.txt"));
             Assert.AreEqual("local change\n", local.Read("o.txt"));
             Assert.AreEqual(0, local.Git.Stashes().Count);
+        }
+
+        [Test]
+        public void UpdateProject_ListsWhatTheFetchChangedOnEveryBranch()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            foreach (var branch in new[] { "back", "old", "rewritten", "ui" })
+            {
+                upstream.RunGit("switch", "-q", "-c", branch, "main");
+                upstream.Write(branch + ".txt", "1\n");
+                upstream.CommitAll(branch);
+                upstream.RunGit("push", "-q", "-u", "origin", branch);
+            }
+
+            using var local = remote.Clone("local");
+
+            upstream.RunGit("switch", "-q", "main");
+            upstream.Write("f.txt", "theirs 1\n");
+            upstream.CommitAll("theirs 1");
+            upstream.Write("f.txt", "theirs 2\n");
+            upstream.CommitAll("theirs 2");
+            upstream.RunGit("tag", "v1");
+            upstream.RunGit("tag", "-a", "v2", "-m", "v2");
+            upstream.RunGit("push", "-q", "origin", "main", "v1", "v2");
+            upstream.RunGit("push", "-q", "-f", "origin", "main~2:back");
+            upstream.RunGit("push", "-q", "origin", "--delete", "old");
+            upstream.RunGit("switch", "-q", "-c", "replacement", "main");
+            upstream.Write("r.txt", "1\n");
+            upstream.CommitAll("replacement");
+            upstream.RunGit("push", "-q", "-f", "origin", "replacement:rewritten", "replacement:new");
+            upstream.RunGit("switch", "-q", "ui");
+            upstream.Write("ui.txt", "2\n");
+            upstream.CommitAll("ui 2");
+            upstream.RunGit("push", "-q", "origin", "ui");
+
+            var result = local.Git.UpdateProject(UpdateStrategy.Merge);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Merged 2 commits from origin/main\n" +
+                            "  origin/main: 2 new commits\n" +
+                            "  origin/back: 1 commit removed on the remote\n" +
+                            "  origin/rewritten: rewritten on the remote, 3 new commits, 1 removed\n" +
+                            "  origin/ui: 1 new commit\n" +
+                            "  origin/new: new branch\n" +
+                            "  origin/old: deleted on the remote\n" +
+                            "  v1: new tag\n" +
+                            "  v2: new tag", result.Message);
+        }
+
+        [Test]
+        public void UpdateProject_WhenOnlyAnotherBranchChanged_SaysUpToDateAndNamesThatBranch()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+
+            Assert.AreEqual("Already up to date with origin/main", local.Git.UpdateProject(UpdateStrategy.Merge).Message);
+
+            upstream.RunGit("push", "-q", "origin", "main:feature");
+
+            Assert.AreEqual("Already up to date with origin/main\n  origin/feature: new branch",
+                local.Git.UpdateProject(UpdateStrategy.Merge).Message);
+        }
+
+        [Test]
+        public void UpdateProject_WithManyChangedBranches_ListsOnlyTheFirstOnes()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            using var local = remote.Clone("local");
+            upstream.RunGit("push", "-q", "origin", "main:a", "main:b", "main:c");
+
+            var previous = Git.ReportedRefs;
+            Git.ReportedRefs = 2;
+            try
+            {
+                Assert.AreEqual("Already up to date with origin/main\n" +
+                                "  origin/a: new branch\n" +
+                                "  origin/b: new branch\n" +
+                                "  and 1 more", local.Git.UpdateProject(UpdateStrategy.Merge).Message);
+            }
+            finally
+            {
+                Git.ReportedRefs = previous;
+            }
+        }
+
+        [Test]
+        public void UpdateProject_ListsTagsTheFetchMovedOrDeleted()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            upstream.RunGit("tag", "moved");
+            upstream.RunGit("tag", "gone");
+            upstream.RunGit("push", "-q", "origin", "moved", "gone");
+            using var local = remote.Clone("local");
+            local.RunGit("tag", "mine");
+            local.RunGit("config", "fetch.pruneTags", "true");
+            local.RunGit("config", "--add", "remote.origin.fetch", "+refs/tags/*:refs/tags/*");
+
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("tag", "-f", "moved");
+            upstream.RunGit("push", "-q", "origin", "main");
+            upstream.RunGit("push", "-q", "-f", "origin", "moved");
+            upstream.RunGit("push", "-q", "origin", "--delete", "gone");
+
+            var result = local.Git.UpdateProject(UpdateStrategy.Merge);
+
+            Assert.AreEqual("Merged 1 commit from origin/main\n" +
+                            "  origin/main: 1 new commit\n" +
+                            "  moved: tag moved\n" +
+                            "  gone: tag deleted, the remote does not have it\n" +
+                            "  mine: tag deleted, the remote does not have it", result.Message);
+        }
+
+        [Test]
+        public void UpdateProject_ListsTheUpstreamFirstWhenALocalBranchHasItsShortName()
+        {
+            using var remote = TestRepository.CreateBare();
+            using var upstream = PublishBase(remote);
+            upstream.RunGit("push", "-q", "origin", "main:back");
+            using var local = remote.Clone("local");
+            local.RunGit("branch", "origin/main");
+
+            upstream.Write("f.txt", "theirs\n");
+            upstream.CommitAll("theirs");
+            upstream.RunGit("push", "-q", "origin", "main", "main:back");
+
+            var result = local.Git.UpdateProject(UpdateStrategy.Merge);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            StringAssert.EndsWith("\n  origin/main: 1 new commit\n  origin/back: 1 new commit", result.Message);
         }
 
         [Test]
