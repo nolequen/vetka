@@ -40,6 +40,8 @@ namespace Upwake.Vetka
 
         public bool IsRejected => ExitCode == RejectedExitCode;
 
+        public bool IsDone => IsSuccess || ExitCode == DoneExitCode;
+
         public string Message
         {
             get
@@ -74,9 +76,13 @@ namespace Upwake.Vetka
 
         public static GitResult Rejected(string message) => new GitResult(RejectedExitCode, "", message);
 
+        public static GitResult Done(string message) => new GitResult(DoneExitCode, "", message);
+
         private const int CancelledExitCode = -2;
 
         private const int RejectedExitCode = -3;
+
+        private const int DoneExitCode = -4;
     }
 
     internal readonly struct GitIdentity

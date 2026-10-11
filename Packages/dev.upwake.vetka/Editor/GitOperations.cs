@@ -21,7 +21,6 @@ namespace Upwake.Vetka
             public Action Declined;
             public bool Guarded;
             public bool RefreshAssets;
-            public bool ChangesRepository;
             public bool ReportsProgress;
             public int? ProgressId;
             public bool AutoRefreshDisallowed;
@@ -31,6 +30,8 @@ namespace Upwake.Vetka
         private static Operation _current;
 
         internal const string InterruptedKey = "Vetka.Operation.Interrupted";
+
+        internal const string CancelledReason = "Cancelled";
 
         static GitOperations()
         {
@@ -75,8 +76,8 @@ namespace Upwake.Vetka
         public static event Action RepositoryChanged;
 
         public static void Run(string title, Func<GitResult> work, Action<GitResult> onCompleted = null,
-            bool refreshAssets = false, bool reportsProgress = false, bool changesRepository = false,
-            Func<bool> prepare = null, int? progressId = null)
+            bool refreshAssets = false, bool reportsProgress = false, Func<bool> prepare = null,
+            int? progressId = null)
         {
             EditorApplication.LockReloadAssemblies();
             Pending.Enqueue(new Operation
@@ -90,7 +91,6 @@ namespace Upwake.Vetka
                 Declined = () => onCompleted?.Invoke(GitResult.Cancelled($"{Describe(title)} cancelled")),
                 Guarded = true,
                 RefreshAssets = refreshAssets,
-                ChangesRepository = changesRepository || refreshAssets,
                 ReportsProgress = reportsProgress,
                 ProgressId = progressId
             });
@@ -126,7 +126,7 @@ namespace Upwake.Vetka
                 Work = () => OperationContext.Interruptible(work, out _),
                 Completed = result => onCompleted?.Invoke((T)result),
                 Failed = exception => onAborted?.Invoke($"Failed: {exception.Message}"),
-                Cancelled = () => onAborted?.Invoke("Cancelled")
+                Cancelled = () => onAborted?.Invoke(CancelledReason)
             });
 
             StartNext();
@@ -244,9 +244,10 @@ namespace Upwake.Vetka
                 }
 
                 var cancelled = failure == null && context.IsCancelled;
+                var failed = failure != null || result is GitResult { IsDone: false, IsCancelled: false };
                 if (progressId.HasValue && Progress.Exists(progressId.Value))
                 {
-                    Progress.Finish(progressId.Value, failure != null ? Progress.Status.Failed
+                    Progress.Finish(progressId.Value, failed ? Progress.Status.Failed
                         : cancelled ? Progress.Status.Canceled
                         : Progress.Status.Succeeded);
                 }
@@ -273,7 +274,7 @@ namespace Upwake.Vetka
                     operation.Completed?.Invoke(result);
                 }
 
-                if (operation.ChangesRepository)
+                if (operation.Guarded)
                 {
                     RepositoryChanged?.Invoke();
                 }

@@ -104,24 +104,28 @@ namespace Upwake.Vetka
             }
         }
 
-        public GitResult CommitAndPush(IEnumerable<string> files, string message, out bool committed)
+        public GitResult CommitAndPush(IEnumerable<string> files, string message, out bool committed,
+            PushTags? tags = null)
         {
             var commit = Commit(files, message);
-            committed = commit.IsSuccess;
-            if (!committed)
+            committed = commit.IsDone;
+            if (!commit.IsSuccess)
             {
-                return commit;
+                return committed ? GitResult.Done($"{commit.Message}\nNot pushed") : commit;
             }
 
-            var push = Push();
+            var push = PushHead(null, null, tags, out var pushedTags);
             if (push.IsCancelled)
             {
                 return GitResult.Cancelled($"{CommitSummary(message, false)}, push cancelled");
             }
 
-            if (push.IsSuccess)
+            if (push.IsDone)
             {
-                return GitResult.Success(CommitSummary(message, false, PushTarget()?.Name ?? "the remote"));
+                var pushedTo = PushTarget()?.Name ?? "the remote";
+                var summary = CommitSummary(message, false,
+                    pushedTags > 0 ? $"{pushedTo} with {Counted(pushedTags, "tag")}" : pushedTo);
+                return push.IsSuccess ? GitResult.Success(summary) : GitResult.Done($"{summary}\n{push.Message}");
             }
 
             var failed = $"{CommitSummary(message, false)}, but the push failed\n{push.Message}";
@@ -291,7 +295,7 @@ namespace Upwake.Vetka
                 var synced = RunWithPathspecs(null, paths, "reset", "-q", "HEAD");
                 return synced.IsSuccess
                     ? GitResult.Success(summary)
-                    : GitResult.Failure($"{summary}, but the staged changes could not be updated\n{synced.Message}");
+                    : GitResult.Done($"{summary}, but the staged changes could not be updated\n{synced.Message}");
             }
             finally
             {

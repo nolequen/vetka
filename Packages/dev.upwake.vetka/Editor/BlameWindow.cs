@@ -30,12 +30,10 @@ namespace Upwake.Vetka
         {
             var window = GetWindow<BlameWindow>(utility: false, "Blame");
             window._git = git;
-            window._path = path;
             window._localPath = path;
-            window._revision = null;
             window.minSize = new Vector2(500, 300);
             window.wantsMouseMove = true;
-            window.Refresh();
+            window.ShowRevision(null, path);
         }
 
         private void Refresh()

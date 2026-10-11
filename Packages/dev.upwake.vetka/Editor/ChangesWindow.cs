@@ -39,7 +39,7 @@ namespace Upwake.Vetka
         [NonSerialized] private bool _committing;
         [NonSerialized] private bool _pushing;
         private readonly HashSet<string> _selected = new HashSet<string>();
-        private string _anchor;
+        [NonSerialized] private string _anchor;
         [SerializeField] private bool _changesExpanded = true;
         [SerializeField] private bool _unversionedExpanded = true;
 
@@ -230,7 +230,7 @@ namespace Upwake.Vetka
             {
                 var oldDirectory = DirectoryOf(change.OldPath);
                 note = oldDirectory == directory
-                    ? $"– renamed from {System.IO.Path.GetFileName(change.OldPath)}"
+                    ? $"– renamed from {Git.FileName(change.OldPath)}"
                     : $"– moved from {(oldDirectory.Length == 0 ? "the root" : oldDirectory + "/")}";
             }
 
@@ -240,7 +240,7 @@ namespace Upwake.Vetka
                 OldPath = change.OldPath,
                 Status = change.Status,
                 Checked = isChecked,
-                Name = new GUIContent(System.IO.Path.GetFileName(change.Path), tooltip),
+                Name = new GUIContent(Git.FileName(change.Path), tooltip),
                 Note = note == null ? null : new GUIContent(note, tooltip),
                 Directory = directory.Length == 0 ? null : new GUIContent(directory, tooltip)
             };
@@ -479,7 +479,7 @@ namespace Upwake.Vetka
         }
 
         private static string DirectoryOf(string path) =>
-            System.IO.Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "";
+            path.Substring(0, Math.Max(0, path.LastIndexOf('/')));
 
         private static float DrawSegment(Rect row, float x, GUIContent content, GUIStyle style)
         {
@@ -705,17 +705,18 @@ namespace Upwake.Vetka
         {
             CommitMessageHistory.instance.Remember(message);
             var committed = false;
+            var tags = GitSettings.PushTagsEnabled ? GitSettings.PushTagsMode : (PushTags?)null;
             GitOperations.Run(
                 CommitTitle(push),
                 () =>
                 {
                     if (push)
                     {
-                        return git.CommitAndPush(files, message, out committed);
+                        return git.CommitAndPush(files, message, out committed, tags);
                     }
 
                     var commit = git.Commit(files, message);
-                    committed = commit.IsSuccess;
+                    committed = commit.IsDone;
                     return commit;
                 },
                 result =>
@@ -742,7 +743,7 @@ namespace Upwake.Vetka
 
                     if (result.IsRejected)
                     {
-                        RejectedPush.Offer(git, result);
+                        RejectedPush.Offer(git, result, tags: tags);
                     }
                     else
                     {

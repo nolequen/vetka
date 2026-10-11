@@ -109,7 +109,26 @@ namespace Upwake.Vetka
             return standardPaths.FirstOrDefault(File.Exists);
         }
 
-        public GitResult Version() => Run("--version");
+        public GitResult Version()
+        {
+            var version = Run("--version");
+            return version.IsSuccess && !IsSupportedVersion(version.Output)
+                ? GitResult.Failure($"{version.Output}\nVetka needs Git 2.31 or newer")
+                : version;
+        }
+
+        internal static bool IsSupportedVersion(string output)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(output, @"^git version (\d+)\.(\d+)");
+            if (!match.Success)
+            {
+                return true;
+            }
+
+            var major = int.Parse(match.Groups[1].Value);
+            var minor = int.Parse(match.Groups[2].Value);
+            return major > 2 || major == 2 && minor >= 31;
+        }
 
         private GitResult TopLevel()
         {

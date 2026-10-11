@@ -25,12 +25,22 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual(expected, Git.ParseStatus(index, workTree));
         }
 
+        [TestCase("git version 2.30.9", false)]
+        [TestCase("git version 1.9.5.msysgit.0", false)]
+        [TestCase("git version 2.31.0", true)]
+        [TestCase("git version 2.55.0.windows.3", true)]
+        [TestCase("git version 3.0.0", true)]
+        public void IsSupportedVersion_NeedsGit231(string output, bool supported)
+        {
+            Assert.AreEqual(supported, Git.IsSupportedVersion(output));
+        }
+
         [Test]
         public void Windows_DoNotKeepBusyStateAcrossADomainReload()
         {
             var transient = new HashSet<string>
             {
-                "_git", "_loading", "_loadingMore", "_loaded", "_pushing", "_committing", "_busy", "_amendRequested",
+                "_git", "_loading", "_loadingMore", "_loaded", "_pushing", "_committing", "_busy", "_amending",
                 "_closing", "_aborted", "_moreAborted", "_focused"
             };
             var windows = typeof(Git).Assembly.GetTypes()

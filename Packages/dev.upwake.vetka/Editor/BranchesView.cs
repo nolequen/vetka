@@ -122,6 +122,10 @@ namespace Upwake.Vetka
                 _rows = BuildRows();
                 _offsets = Offsets(_rows, out _contentHeight);
                 _rowsDirty = false;
+                if (_highlight >= _rows.Count)
+                {
+                    _highlight = -1;
+                }
             }
 
             HandleKeyboard();
@@ -156,6 +160,7 @@ namespace Upwake.Vetka
             }
 
             var highlight = _highlight;
+            var selected = Selected();
             _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
             var area = GUILayoutUtility.GetRect(1, _contentHeight, GUILayout.ExpandWidth(true));
             var visibleBottom = _scrollPos.y + _area.height;
@@ -173,7 +178,7 @@ namespace Upwake.Vetka
                     break;
                 }
 
-                DrawRow(i, _rows[i], new Rect(area.x, area.y + top, area.width, height));
+                DrawRow(i, _rows[i], new Rect(area.x, area.y + top, area.width, height), selected);
             }
 
             if (_branches == null)
@@ -220,7 +225,7 @@ namespace Upwake.Vetka
                 ("Update Project...", GitMenu.UpdateProject),
                 ("Commit...", GitMenu.OpenChangesWindow),
                 ("Push...", GitMenu.OpenPushWindow),
-                ("New Branch...", () => BranchActions.NewBranch(_git, current ?? "HEAD", currentBranch.Ref ?? "HEAD", Reload))
+                ("New Branch...", () => BranchActions.NewBranch(_git, current ?? "HEAD", "HEAD", Reload))
             };
 
             foreach (var (label, action) in actions.Where(item => Matches(item.label)))
@@ -275,7 +280,7 @@ namespace Upwake.Vetka
             {
                 Kind = RowKind.Header,
                 Label = (isExpanded ? "▾  " : "▸  ") + title,
-                Activate = () => Toggle(sectionTitle)
+                Activate = filtering ? (Action)null : () => Toggle(sectionTitle)
             });
 
             if (!isExpanded)
@@ -313,7 +318,7 @@ namespace Upwake.Vetka
             }
         }
 
-        private void DrawRow(int index, Row row, Rect rect)
+        private void DrawRow(int index, Row row, Rect rect, int selected)
         {
             if (row.Kind == RowKind.Separator)
             {
@@ -328,7 +333,7 @@ namespace Upwake.Vetka
 
             var current = Event.current;
 
-            if (current.type == EventType.MouseMove && rect.Contains(current.mousePosition))
+            if (current.type == EventType.MouseMove && rect.Contains(current.mousePosition) && IsSelectable(index))
             {
                 _highlight = index;
             }
@@ -355,7 +360,7 @@ namespace Upwake.Vetka
                 return;
             }
 
-            if (index == _highlight)
+            if (index == selected)
             {
                 EditorGUI.DrawRect(rect, GitColors.Selection);
             }
@@ -403,18 +408,18 @@ namespace Upwake.Vetka
             switch (current.keyCode)
             {
                 case KeyCode.DownArrow:
-                    _highlight = NextSelectable(_highlight, 1);
+                    _highlight = NextSelectable(Selected(), 1);
                     ScrollTo(_highlight);
                     current.Use();
                     break;
                 case KeyCode.UpArrow:
-                    _highlight = NextSelectable(_highlight, -1);
+                    _highlight = NextSelectable(Selected(), -1);
                     ScrollTo(_highlight);
                     current.Use();
                     break;
                 case KeyCode.Return:
                 case KeyCode.KeypadEnter:
-                    var index = _highlight >= 0 ? _highlight : NextSelectable(-1, 1);
+                    var index = Selected();
                     if (index >= 0 && index < _rows.Count)
                     {
                         Activate(_rows[index], RowRect(index));
@@ -425,11 +430,26 @@ namespace Upwake.Vetka
             }
         }
 
+        private int Selected()
+        {
+            if (IsSelectable(_highlight))
+            {
+                return _highlight;
+            }
+
+            var branch = _filter.Trim().Length > 0 ? _rows.FindIndex(row => row.Kind == RowKind.Branch) : -1;
+            return branch >= 0 ? branch : NextSelectable(-1, 1);
+        }
+
+        private bool IsSelectable(int index) =>
+            index >= 0 && index < _rows.Count && _rows[index].Kind != RowKind.Separator &&
+            !(_filter.Trim().Length > 0 && _rows[index].Kind == RowKind.Header);
+
         private int NextSelectable(int from, int step)
         {
             for (var i = from + step; i >= 0 && i < _rows.Count; i += step)
             {
-                if (_rows[i].Kind != RowKind.Separator)
+                if (IsSelectable(i))
                 {
                     return i;
                 }

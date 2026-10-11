@@ -73,7 +73,7 @@ namespace Upwake.Vetka
             var stuck = now == null || now.Changed.Count == 0 ? new List<string>() : Stuck(own, now.Changed, pushed);
             return stuck.Count == 0
                 ? GitResult.Success(done)
-                : GitResult.Failure($"{done}\n{FileList("These files stay modified after stashing", stuck)}\n{ModifiedHint}");
+                : GitResult.Done($"{done}\n{FileList("These files stay modified after stashing", stuck)}\n{ModifiedHint}");
         }
 
         public GitResult ApplyStash(GitStash stash, bool drop)
@@ -130,7 +130,7 @@ namespace Upwake.Vetka
             if (withoutStaging)
             {
                 return drop
-                    ? GitResult.Failure($"{reference} applied without the staging and not dropped\n{StagingKept}")
+                    ? GitResult.Done($"{reference} applied without the staging and not dropped\n{StagingKept}")
                     : GitResult.Success($"{reference} applied without the staging");
             }
 
@@ -142,7 +142,7 @@ namespace Upwake.Vetka
             var dropResult = DropStashEntry(stash.Hash);
             return dropResult.IsSuccess
                 ? GitResult.Success($"{reference} applied and dropped")
-                : GitResult.Failure($"{reference} applied, but not dropped\n{dropResult.Message}");
+                : GitResult.Done($"{reference} applied, but not dropped\n{dropResult.Message}");
         }
 
         private GitResult StashCreate(params string[] message)
@@ -261,7 +261,7 @@ namespace Upwake.Vetka
 
         private bool Untouched(string snapshot, List<string> created, string root)
         {
-            if (!string.IsNullOrEmpty(Conflicts()) || created.Any(path => File.Exists(Path.Combine(root, path))))
+            if (Conflicts().Count > 0 || created.Any(path => File.Exists(Path.Combine(root, path))))
             {
                 return false;
             }
@@ -345,10 +345,9 @@ namespace Upwake.Vetka
         }
 
         private GitResult RollbackStash(string reference, string stash, string message, GitResult apply,
-            string conflicts, string snapshot, List<string> created, TreeState before)
+            List<string> conflicts, string snapshot, List<string> created, TreeState before)
         {
-            var conflicted = conflicts.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            var reason = conflicted.Length == 0 ? apply.Message : ConflictList(conflicts);
+            var reason = conflicts.Count == 0 ? apply.Message : ConflictList(conflicts);
             var touched = StashPaths(stash);
             var staged = Run("diff", "--cached", "--name-only", "-z", "--no-renames");
             var now = ReadTree();
@@ -366,7 +365,7 @@ namespace Upwake.Vetka
                         .Concat(RenamedSince(stash, touched))
                         .Concat(NulSeparated(staged.Output))
                         .Concat(before.Changed)
-                        .Concat(conflicted)).Contains)
+                        .Concat(conflicts)).Contains)
                     .ToList(), path => !before.Untracked.Contains(path)) ?? GitResult.Success("");
             if (!cleanup.IsSuccess)
             {
@@ -390,7 +389,7 @@ namespace Upwake.Vetka
             }
 
             ForgetInterruption();
-            var because = conflicted.Length == 0 ? "" : " because of conflicts";
+            var because = conflicts.Count == 0 ? "" : " because of conflicts";
             var text = new StringBuilder();
             text.AppendLine(restore.IsSuccess
                 ? $"{Named(stash, reference)} not applied{because}, the project and the stash are unchanged"

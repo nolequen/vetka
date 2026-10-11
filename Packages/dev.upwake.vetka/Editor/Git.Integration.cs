@@ -39,18 +39,50 @@ namespace Upwake.Vetka
             }
 
             var after = before == null ? null : FetchedRefs();
-            var upstream = UpstreamBranch();
+            var upstream = UpstreamBranch(out var upstreamError);
             if (string.IsNullOrEmpty(upstream))
             {
                 var merge = Run("config", "--get", $"branch.{branch}.merge");
-                return GitResult.Failure(merge.IsSuccess && merge.Output.Length > 0
-                    ? $"The upstream of {branch} ({merge.Output}) no longer exists, it was probably deleted on the remote"
-                    : $"Branch {branch} has no upstream to update from");
+                var remote = Run("config", "--get", $"branch.{branch}.remote");
+                if (upstreamError.Message.Contains("not stored as a remote-tracking branch") &&
+                    merge.Output.StartsWith("refs/heads/", StringComparison.Ordinal) &&
+                    Run("config", "--get", $"remote.{remote.Output}.url").IsSuccess)
+                {
+                    var tracked = new GitPushTarget(remote.Output, merge.Output.Substring("refs/heads/".Length), false);
+                    var fetched = Interruptible("Update", () => FetchBranch(tracked));
+                    if (fetched.IsCancelled || !fetched.IsSuccess && !BranchMissing(fetched))
+                    {
+                        return fetched;
+                    }
+
+                    if (fetched.IsSuccess)
+                    {
+                        upstream = tracked.Name;
+                        after = before == null ? null : FetchedRefs();
+                    }
+                    else
+                    {
+                        Run("update-ref", "-d", tracked.TrackingRef);
+                    }
+                }
+
+                if (string.IsNullOrEmpty(upstream))
+                {
+                    return GitResult.Failure(merge.IsSuccess && merge.Output.Length > 0
+                        ? $"The upstream of {branch} ({merge.Output}) no longer exists, it was probably deleted on the remote"
+                        : $"Branch {branch} has no upstream to update from");
+                }
             }
 
             var integrated = Integrate(strategy, upstream);
-            var report = integrated.IsSuccess ? FetchReport(before, after, upstream) : "";
-            return report.Length > 0 ? GitResult.Success($"{integrated.Message}\n{report}") : integrated;
+            var report = integrated.IsDone ? FetchReport(before, after, upstream) : "";
+            if (report.Length == 0)
+            {
+                return integrated;
+            }
+
+            var text = $"{integrated.Message}\n{report}";
+            return integrated.IsSuccess ? GitResult.Success(text) : GitResult.Done(text);
         }
 
         public GitResult UpdateAndPush(UpdateStrategy strategy, PushTags? tags = null)
@@ -77,26 +109,28 @@ namespace Upwake.Vetka
 
                 var gone = $"{target.Name} no longer exists on the remote";
                 var merged = "";
+                var mergeWarned = false;
                 var tracked = TrackedCommit(target);
                 if (tracked != null && !Run("merge-base", "--is-ancestor", tracked, "HEAD").IsSuccess)
                 {
                     var integrated = Integrate(strategy, target.TrackingRef, target.Name);
-                    if (!integrated.IsSuccess)
+                    if (!integrated.IsDone)
                     {
                         return integrated.IsCancelled
                             ? GitResult.Cancelled($"{gone}\n{integrated.Message}")
                             : GitResult.Failure($"{gone}\n{integrated.Message}");
                     }
 
-                    merged = integrated.Message + ", ";
+                    mergeWarned = !integrated.IsSuccess;
+                    merged = integrated.Message + (mergeWarned ? "\n" : ", ");
                 }
 
                 Run("update-ref", "-d", target.TrackingRef);
                 var recreated = Push(tags: tags);
-                if (recreated.IsSuccess)
+                if (recreated.IsDone)
                 {
-                    return GitResult.Success(
-                        $"{merged}{target.Name} no longer existed on the remote\n{recreated.Message}");
+                    var text = $"{merged}{target.Name} no longer existed on the remote\n{recreated.Message}";
+                    return recreated.IsSuccess && !mergeWarned ? GitResult.Success(text) : GitResult.Done(text);
                 }
 
                 return recreated.IsCancelled
@@ -105,15 +139,17 @@ namespace Upwake.Vetka
             }
 
             string updated = null;
+            var warned = false;
             if (TrackedCommit(target) != null)
             {
                 var update = Integrate(strategy, target.TrackingRef, target.Name);
-                if (!update.IsSuccess)
+                if (!update.IsDone)
                 {
                     return update;
                 }
 
                 updated = update.Message;
+                warned = !update.IsSuccess;
             }
 
             var push = Push(tags: tags);
@@ -122,14 +158,17 @@ namespace Upwake.Vetka
                 return push;
             }
 
-            if (push.IsSuccess)
+            if (push.IsDone)
             {
-                return GitResult.Success($"{updated}\n{push.Message}");
+                var text = $"{updated}\n{push.Message}";
+                return push.IsSuccess && !warned ? GitResult.Success(text) : GitResult.Done(text);
             }
 
             return push.IsCancelled
-                ? GitResult.Cancelled($"{updated}, push cancelled")
-                : GitResult.Failure($"{updated}, but the push failed\n{push.Message}");
+                ? GitResult.Cancelled(warned ? $"{updated}\nPush cancelled" : $"{updated}, push cancelled")
+                : GitResult.Failure(warned
+                    ? $"{updated}\nThe push failed\n{push.Message}"
+                    : $"{updated}, but the push failed\n{push.Message}");
         }
 
         public GitResult Integrate(UpdateStrategy strategy, string target, string name = null)
@@ -151,13 +190,14 @@ namespace Upwake.Vetka
                 return GitResult.Failure($"Cannot {strategy.ToString().ToLowerInvariant()}: no branch is checked out");
             }
 
-            var behind = Run("rev-list", "--count", $"HEAD..{target}");
+            var unborn = !HasHead();
+            var behind = unborn ? Run("rev-list", "--count", target) : Run("rev-list", "--count", $"HEAD..{target}");
             if (behind.IsSuccess && behind.Output == "0")
             {
                 return GitResult.Success($"Already up to date with {name}");
             }
 
-            if (strategy == UpdateStrategy.Rebase)
+            if (strategy == UpdateStrategy.Rebase && !unborn)
             {
                 var merges = Run("rev-list", "--merges", "--count", $"{target}..HEAD");
                 if (merges.IsSuccess && merges.Output != "0")
@@ -181,8 +221,8 @@ namespace Upwake.Vetka
                 ThreeWay = strategy == UpdateStrategy.Merge,
                 Done = done,
                 Restored = "local changes restored",
-                Apply = () => strategy == UpdateStrategy.Rebase
-                    ? Run("rebase", argument)
+                Apply = () => unborn ? Run("merge", "--ff-only", "--no-stat", argument)
+                    : strategy == UpdateStrategy.Rebase ? Run("rebase", argument)
                     : Run("merge", "--no-stat", "--no-edit", argument),
                 Abort = () => Run(command, "--abort"),
                 Quit = () => Run(command, "--quit"),
@@ -271,7 +311,7 @@ namespace Upwake.Vetka
                 Apply = () =>
                 {
                     var applied = revert ? Run("revert", "--no-edit", commit) : Run("cherry-pick", commit);
-                    return applied.ExitCode == 1 && string.IsNullOrEmpty(Conflicts()) &&
+                    return applied.ExitCode == 1 && Conflicts().Count == 0 &&
                            Run("diff", "--cached", "--quiet", "HEAD").IsSuccess
                         ? GitResult.Failure(revert
                             ? $"Its changes are already undone in {branch}"
@@ -397,7 +437,7 @@ namespace Upwake.Vetka
 
             string stash = null;
             var pushed = DateTime.UtcNow;
-            if (local.Value)
+            if (local.Value && change.TargetCommit != head.Output)
             {
                 var before = StashHead();
                 var stashMessage =
@@ -445,7 +485,7 @@ namespace Upwake.Vetka
             {
                 result = Completed(change, start, stash, baseline);
             }
-            else if (change.Arrived != null && string.IsNullOrEmpty(Conflicts()) && change.Arrived())
+            else if (change.Arrived != null && Conflicts().Count == 0 && change.Arrived())
             {
                 var completed = Completed(change, start, stash, baseline);
                 result = GitResult.Failure($"{completed.Message}\n" +
@@ -572,7 +612,7 @@ namespace Upwake.Vetka
             {
                 return stash == null
                     ? GitResult.Success(change.Done)
-                    : GitResult.Failure($"{change.Done}, but the local changes cannot be read\n{StashKept(stash)}");
+                    : GitResult.Done($"{change.Done}, but the local changes cannot be read\n{StashKept(stash)}");
             }
 
             var changed = Added(now.Changed, baseline.Changed);
@@ -615,23 +655,23 @@ namespace Upwake.Vetka
             {
                 return stayModified.Length == 0
                     ? GitResult.Success(change.Done)
-                    : GitResult.Failure(change.Done + stayModified);
+                    : GitResult.Done(change.Done + stayModified);
             }
 
             var (restore, withoutStaging) = RestoreLocalChanges(stash);
             if (restore.IsSuccess)
             {
                 return withoutStaging
-                    ? GitResult.Failure($"{change.Done}, {change.Restored} without the staging\n{StagingKept}{stayModified}")
+                    ? GitResult.Done($"{change.Done}, {change.Restored} without the staging\n{StagingKept}{stayModified}")
                     : stayModified.Length == 0
                         ? GitResult.Success($"{change.Done}, {change.Restored}")
-                        : GitResult.Failure($"{change.Done}, {change.Restored}{stayModified}");
+                        : GitResult.Done($"{change.Done}, {change.Restored}{stayModified}");
             }
 
             var conflicts = Conflicts();
-            if (string.IsNullOrEmpty(conflicts))
+            if (conflicts.Count == 0)
             {
-                return GitResult.Failure(
+                return GitResult.Done(
                     $"{change.Done}, but local changes were not restored\n{StashKept(stash)}\n{restore.Message}{stayModified}");
             }
 
@@ -664,7 +704,7 @@ namespace Upwake.Vetka
             return now != null && Added(now.Changed, baseline.Changed).All(paths.Contains);
         }
 
-        private GitResult? UndoRestore(string stash, TreeState baseline, string conflicts)
+        private GitResult? UndoRestore(string stash, TreeState baseline, List<string> conflicts)
         {
             var paths = StashPaths(stash);
             var now = ReadTree();
@@ -673,10 +713,9 @@ namespace Upwake.Vetka
                 return GitResult.Failure("The changed files cannot be read");
             }
 
-            var conflicted = conflicts.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            var applied = new HashSet<string>(paths.Concat(RenamedSince(stash, paths)).Concat(conflicted),
+            var applied = new HashSet<string>(paths.Concat(RenamedSince(stash, paths)).Concat(conflicts),
                 StringComparer.Ordinal);
-            return ResetToHead(now.Changed.Concat(conflicted).Where(applied.Contains).Distinct().ToList(),
+            return ResetToHead(now.Changed.Concat(conflicts).Where(applied.Contains).Distinct().ToList(),
                 path => !baseline.Untracked.Contains(path));
         }
 
@@ -714,7 +753,7 @@ namespace Upwake.Vetka
                 message.AppendLine(StashKept(stash));
             }
 
-            return GitResult.Failure(message.ToString().TrimEnd());
+            return GitResult.Done(message.ToString().TrimEnd());
         }
 
         private GitResult RolledBackInUse(TreeChange change, ReturnPoint start, string stash, List<string> stale,
@@ -777,7 +816,7 @@ namespace Upwake.Vetka
             GitResult applied)
         {
             var conflicts = Conflicts();
-            var details = string.IsNullOrEmpty(conflicts) ? applied.Message : ConflictList(conflicts);
+            var details = conflicts.Count == 0 ? applied.Message : ConflictList(conflicts);
             var top = TopLevel();
             using var saves = new FileBackup(top.IsSuccess ? Path.GetFullPath(top.Output) : _projectRoot);
             var notSaved = saves.Save(WrittenMeanwhile(conflicts, baseline));
@@ -837,7 +876,7 @@ namespace Upwake.Vetka
             return GitResult.Failure(message.ToString().TrimEnd());
         }
 
-        private List<string> WrittenMeanwhile(string conflicts, TreeState baseline)
+        private List<string> WrittenMeanwhile(List<string> conflicts, TreeState baseline)
         {
             var unstaged = Run("diff", "--name-only", "-z", "--no-renames");
             var now = ReadTree();
@@ -846,8 +885,7 @@ namespace Upwake.Vetka
                 return new List<string>();
             }
 
-            var conflicted = new HashSet<string>(
-                conflicts.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+            var conflicted = new HashSet<string>(conflicts, StringComparer.Ordinal);
             var paths = NulSeparated(unstaged.Output)
                 .Where(path => !conflicted.Contains(path))
                 .Concat(Added(now.Untracked, baseline.Untracked))
@@ -1149,14 +1187,14 @@ namespace Upwake.Vetka
                 OperationInProgress().Name, path);
         }
 
-        private string Conflicts() => Run("diff", "--name-only", "--diff-filter=U").Output;
+        private List<string> Conflicts() => NulSeparated(Run("diff", "--name-only", "-z", "--diff-filter=U").Output);
 
         private (GitResult Result, bool WithoutStaging) RestoreLocalChanges(string stash)
         {
             var withIndex = Run("stash", "apply", "--index", stash);
             if (!withIndex.IsSuccess)
             {
-                return !string.IsNullOrEmpty(Conflicts())
+                return Conflicts().Count > 0
                     ? (withIndex, false)
                     : (Run("stash", "apply", stash), true);
             }
@@ -1251,8 +1289,7 @@ namespace Upwake.Vetka
         private static string IntegrationName(UpdateStrategy strategy, string target) =>
             strategy == UpdateStrategy.Rebase ? $"Rebase onto {target}" : $"Merge of {target}";
 
-        private static string ConflictList(string conflicts) =>
-            FileList("Conflicts", conflicts.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries));
+        private static string ConflictList(List<string> conflicts) => FileList("Conflicts", conflicts);
 
         private static string FileList(string title, IEnumerable<string> files)
         {
@@ -1353,14 +1390,14 @@ namespace Upwake.Vetka
         public GitResult DeleteBranch(string name, bool force)
         {
             var delete = Run("branch", force ? "-D" : "-d", name);
-            return delete.IsSuccess ? GitResult.Success($"Branch {name} deleted") : delete;
-        }
+            if (delete.IsSuccess)
+            {
+                return GitResult.Success($"Branch {name} deleted");
+            }
 
-        public bool CanForceDelete(string name)
-        {
-            var branch = Run("for-each-ref", "--format=%(worktreepath)", "refs/heads/" + name);
-            return branch.IsSuccess && Run("rev-parse", "-q", "--verify", "refs/heads/" + name).IsSuccess &&
-                   branch.Output.Length == 0;
+            return !force && delete.Message.Contains("is not fully merged")
+                ? GitResult.Rejected($"Branch {name} is not merged into the current branch or its upstream")
+                : delete;
         }
 
         private GitResult Switch(string description, string done, string target, string expectedBranch,

@@ -85,20 +85,13 @@ namespace Upwake.Vetka
                     : log.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList());
         }
 
-        public GitResult Push(string forceOver = null, string shownHead = null, PushTags? tags = null)
-        {
-            var target = PushTarget();
-            var before = target.HasValue ? TrackedCommit(target.Value) : null;
-            var result = Interruptible("Push", () => PushHead(forceOver, shownHead, tags));
-            if (!result.IsCancelled || !target.HasValue)
-            {
-                return result;
-            }
+        public GitResult Push(string forceOver = null, string shownHead = null, PushTags? tags = null) =>
+            PushHead(forceOver, shownHead, tags, out _);
 
-            var after = TrackedCommit(target.Value);
-            return after != null && after != before && after == HeadCommit()
-                ? GitResult.Success($"Pushed to {target.Value.Name}")
-                : result;
+        private static GitResult InterruptiblePush(Func<GitResult> run)
+        {
+            var result = OperationContext.Interruptible(run, out _);
+            return result.IsCancelled ? GitResult.Cancelled("Push cancelled") : result;
         }
 
         private GitResult FetchBranch(GitPushTarget target) =>
@@ -117,8 +110,9 @@ namespace Upwake.Vetka
             return tracked.IsSuccess ? tracked.Output : null;
         }
 
-        private GitResult PushHead(string forceOver, string shownHead, PushTags? tags)
+        private GitResult PushHead(string forceOver, string shownHead, PushTags? tags, out int newTags)
         {
+            newTags = 0;
             var branch = CurrentBranch(out var branchError);
             if (branch == null)
             {
@@ -171,13 +165,24 @@ namespace Upwake.Vetka
 
             arguments.Add(target.Remote);
             arguments.Add("HEAD");
-            var result = RunWithProgress(LfsProgress, arguments.ToArray());
-            var newTags = PushedRefs(result, NewTagLine).Count;
+            var pushed = HeadCommit();
+            var result = InterruptiblePush(() => RunWithProgress(LfsProgress, arguments.ToArray()));
+            if (result.IsCancelled)
+            {
+                return result;
+            }
+
+            newTags = PushedRefs(result, NewTagLine).Count;
             if (!result.IsSuccess)
             {
                 if (force && result.Message.Contains("[rejected]") && result.Message.Contains("stale info"))
                 {
-                    var fetched = FetchBranch(target);
+                    var fetched = InterruptiblePush(() => FetchBranch(target));
+                    if (fetched.IsCancelled)
+                    {
+                        return fetched;
+                    }
+
                     if (BranchMissing(fetched))
                     {
                         Run("update-ref", "-d", target.TrackingRef);
@@ -209,7 +214,8 @@ namespace Upwake.Vetka
                     }
 
                     return refusal == null ? GitResult.Success(tagsSent ?? "No new tags to push")
-                        : GitResult.Failure(tagsSent != null ? $"{tagsSent}, but {refusal}" : $"Tags not pushed: {refusal}");
+                        : tagsSent != null ? GitResult.Done($"{tagsSent}, but {refusal}")
+                        : GitResult.Failure($"Tags not pushed: {refusal}");
                 }
 
                 if (rejected)
@@ -223,12 +229,22 @@ namespace Upwake.Vetka
                     return result;
                 }
 
-                var landed = TrackedCommit(target) == HeadCommit() && (count > 0 || removed > 0 || !target.Exists);
+                RememberPushed(target, pushed);
+                var landed = count > 0 || removed > 0 || !target.Exists;
                 var sent = landed ? PushedText(force, count, removed, newTags, target) : tagsSent;
-                return GitResult.Failure(sent != null ? $"{sent}, but {refusal}" : $"Tags not pushed: {refusal}");
+                return sent != null ? GitResult.Done($"{sent}, but {refusal}") : GitResult.Failure($"Tags not pushed: {refusal}");
             }
 
+            RememberPushed(target, pushed);
             return GitResult.Success(PushedText(force, count, removed, newTags, target));
+        }
+
+        private void RememberPushed(GitPushTarget target, string pushed)
+        {
+            if (pushed != null && TrackedCommit(target) != pushed)
+            {
+                Run("update-ref", target.TrackingRef, pushed);
+            }
         }
 
         private static string PushedText(bool force, int count, int removed, int tags, GitPushTarget target)
@@ -301,13 +317,15 @@ namespace Upwake.Vetka
             return head.ExitCode == 1 ? "HEAD" : null;
         }
 
-        public string UpstreamBranch()
+        public string UpstreamBranch() => UpstreamBranch(out _);
+
+        private string UpstreamBranch(out GitResult error)
         {
-            var result = Run("rev-parse", "--abbrev-ref", "@{u}");
-            return result.IsSuccess ? result.Output : null;
+            error = Run("rev-parse", "--abbrev-ref", "@{u}");
+            return error.IsSuccess ? error.Output : null;
         }
 
-        internal static int ReportedRefs { get; set; } = 20;
+        internal int ReportedRefs { get; set; } = 20;
 
         private const string RemoteBranchRefs = "refs/remotes/";
 
@@ -396,10 +414,15 @@ namespace Upwake.Vetka
             return global ? identities.Global : identities.Local;
         }
 
-        public (GitIdentity Local, GitIdentity Global) Identities()
+        public (GitResult Result, GitIdentity Local, GitIdentity Global) Identities()
         {
             var values = new Dictionary<string, string>();
             var result = Run("config", "--includes", "--show-scope", "--get-regexp", "-z", @"^user\.(name|email)$");
+            if (!result.IsSuccess && result.ExitCode != 1)
+            {
+                return (result, default, default);
+            }
+
             if (result.IsSuccess)
             {
                 var tokens = result.Output.Split('\0');
@@ -416,7 +439,7 @@ namespace Upwake.Vetka
                 values.TryGetValue(scope + " user.name", out var name) ? name : "",
                 values.TryGetValue(scope + " user.email", out var email) ? email : "");
 
-            return (Scoped("local"), Scoped("global"));
+            return (GitResult.Success(""), Scoped("local"), Scoped("global"));
         }
 
         public GitResult SetIdentity(GitIdentity identity, bool global, GitIdentity current = default)

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using NUnit.Framework;
 
 namespace Upwake.Vetka.Tests
@@ -540,7 +539,6 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual("Merge of other rolled back, it conflicts with local changes\nConflicts:\n  f.txt",
                 result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -600,18 +598,10 @@ namespace Upwake.Vetka.Tests
                 }
             };
 
-            GitResult result;
-            var previous = Git.LockRetryTimeout;
-            Git.LockRetryTimeout = TimeSpan.Zero;
-            try
-            {
-                result = git.ApplyStash(git.Stashes()[0], drop: false);
-            }
-            finally
-            {
-                Git.LockRetryTimeout = previous;
-                File.Delete(indexLock);
-            }
+            git.LockRetryTimeout = TimeSpan.Zero;
+
+            var result = git.ApplyStash(git.Stashes()[0], drop: false);
+            File.Delete(indexLock);
 
             Assert.IsFalse(result.IsSuccess);
             StringAssert.StartsWith("stash@{1} not applied and the project could not be cleaned up\n" +
@@ -724,7 +714,6 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual("stash@{0} not applied because of conflicts, the project and the stash are unchanged\n" +
                             "Conflicts:\n  c.txt", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(1, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -745,7 +734,6 @@ namespace Upwake.Vetka.Tests
             StringAssert.StartsWith("stash@{0} not applied, the project and the stash are unchanged\n", result.Message);
             StringAssert.Contains("u.txt already exists", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(1, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -879,7 +867,6 @@ namespace Upwake.Vetka.Tests
             Assert.IsFalse(result.IsSuccess);
             StringAssert.Contains("f.txt", result.Message);
             Assert.AreEqual(before, local.Snapshot());
-            Assert.AreEqual(0, local.Git.Stashes().Count);
         }
 
         [TestCase(UpdateStrategy.Merge)]
@@ -907,7 +894,6 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual((strategy == UpdateStrategy.Merge ? "Merge of origin/main" : "Rebase onto origin/main") +
                             " rolled back, it conflicts with local changes\nConflicts:\n  f.txt", result.Message);
             Assert.AreEqual(before, local.Snapshot());
-            Assert.AreEqual(0, local.Git.Stashes().Count);
         }
 
         [Test]
@@ -1004,19 +990,13 @@ namespace Upwake.Vetka.Tests
             using var local = remote.Clone("local");
             upstream.RunGit("push", "-q", "origin", "main:a", "main:b", "main:c");
 
-            var previous = Git.ReportedRefs;
-            Git.ReportedRefs = 2;
-            try
-            {
-                Assert.AreEqual("Already up to date with origin/main\n" +
-                                "  origin/a: new branch\n" +
-                                "  origin/b: new branch\n" +
-                                "  and 1 more", local.Git.UpdateProject(UpdateStrategy.Merge).Message);
-            }
-            finally
-            {
-                Git.ReportedRefs = previous;
-            }
+            var git = local.Git;
+            git.ReportedRefs = 2;
+
+            Assert.AreEqual("Already up to date with origin/main\n" +
+                            "  origin/a: new branch\n" +
+                            "  origin/b: new branch\n" +
+                            "  and 1 more", git.UpdateProject(UpdateStrategy.Merge).Message);
         }
 
         [Test]
@@ -1100,7 +1080,6 @@ namespace Upwake.Vetka.Tests
 
             Assert.IsFalse(result.IsSuccess);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -1135,18 +1114,10 @@ namespace Upwake.Vetka.Tests
                 }
             };
 
-            GitResult result;
-            var previous = Git.LockRetryTimeout;
-            Git.LockRetryTimeout = TimeSpan.Zero;
-            try
-            {
-                result = git.Checkout("other");
-            }
-            finally
-            {
-                Git.LockRetryTimeout = previous;
-                File.Delete(indexLock);
-            }
+            git.LockRetryTimeout = TimeSpan.Zero;
+
+            var result = git.Checkout("other");
+            File.Delete(indexLock);
 
             Assert.IsFalse(result.IsSuccess);
             StringAssert.StartsWith("Checkout of other could not be rolled back, it conflicts with local changes\n" +
@@ -1402,7 +1373,6 @@ namespace Upwake.Vetka.Tests
                             "Close the programs that use them and try again, " +
                             "a native plugin loaded by Unity needs an editor restart", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [TestCase(UpdateStrategy.Merge, true)]
@@ -1425,7 +1395,6 @@ namespace Upwake.Vetka.Tests
                                     " failed, the project is unchanged\n", result.Message);
             StringAssert.Contains("Assets/Plugins/native.dll", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -1445,7 +1414,6 @@ namespace Upwake.Vetka.Tests
                                     "the project is unchanged\n", result.Message);
             StringAssert.Contains("Assets/Plugins/native.dll", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -1464,7 +1432,6 @@ namespace Upwake.Vetka.Tests
             StringAssert.StartsWith("Checkout of other is not possible, the local changes could not be stashed, " +
                                     "the project is unchanged\n", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [TestCase(false)]
@@ -1483,7 +1450,6 @@ namespace Upwake.Vetka.Tests
             Assert.IsFalse(result.IsSuccess);
             StringAssert.StartsWith("Changes not stashed, the project is unchanged\n", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -1500,18 +1466,10 @@ namespace Upwake.Vetka.Tests
                 }
             };
 
-            GitResult result;
-            var previous = Git.LockRetryTimeout;
-            Git.LockRetryTimeout = TimeSpan.Zero;
-            try
-            {
-                result = git.Integrate(UpdateStrategy.Merge, "other");
-            }
-            finally
-            {
-                Git.LockRetryTimeout = previous;
-                File.Delete(indexLock);
-            }
+            git.LockRetryTimeout = TimeSpan.Zero;
+
+            var result = git.Integrate(UpdateStrategy.Merge, "other");
+            File.Delete(indexLock);
 
             Assert.IsFalse(result.IsSuccess);
             StringAssert.StartsWith("Merge of other failed and could not be undone\nConflicts:\n  f.txt\n" +
@@ -1552,7 +1510,6 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual("Merge of other failed, the project is unchanged\nConflicts:\n  f.txt", result.Message);
             Assert.AreEqual(2, aborts);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, git.Stashes().Count);
         }
 
         [Test]
@@ -1569,20 +1526,26 @@ namespace Upwake.Vetka.Tests
             repo.Write("o.txt", "local change\n");
             var git = repo.Git;
             var indexLock = Path.Combine(repo.Root, ".git", "index.lock");
-            var locked = false;
+            var applies = 0;
             git.BeforeCommand = arguments =>
             {
-                if (!locked && arguments.Count > 1 && arguments[0] == "stash" && arguments[1] == "apply")
+                if (arguments.Count > 1 && arguments[0] == "stash" && arguments[1] == "apply")
                 {
-                    locked = true;
-                    File.WriteAllText(indexLock, "");
-                    Task.Delay(500).ContinueWith(_ => File.Delete(indexLock));
+                    if (++applies == 1)
+                    {
+                        File.WriteAllText(indexLock, "");
+                    }
+                    else
+                    {
+                        File.Delete(indexLock);
+                    }
                 }
             };
 
             var result = git.Integrate(UpdateStrategy.Merge, "other");
 
             Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual(2, applies);
             Assert.AreEqual("Merged 1 commit from other, local changes restored", result.Message);
             Assert.AreEqual("local change\n", repo.Read("o.txt"));
             Assert.AreEqual(0, git.Stashes().Count);
@@ -1971,7 +1934,6 @@ namespace Upwake.Vetka.Tests
                                     " failed, the project is unchanged\n", result.Message);
             StringAssert.EndsWith("These files could not be written and were put back:\n  b.bin", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [TestCase(false)]
@@ -2033,7 +1995,32 @@ namespace Upwake.Vetka.Tests
                                     " is not possible, the project is unchanged. " +
                                     "These files stay modified even after stashing:\n  crlf.txt\n", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
+        }
+
+        [Test]
+        public void CreateBranch_AtTheCurrentCommit_KeepsAFileThatStaysModifiedAfterStashing()
+        {
+            using var repo = TestRepository.Create();
+            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+            repo.Write("f.txt", "base\n");
+            repo.CommitAll("base");
+            repo.Write(".gitattributes", "*.txt text eol=lf\n");
+            repo.RunGit("add", ".gitattributes");
+            repo.RunGit("commit", "-q", "-m", "attributes");
+            repo.WriteBytes("crlf.txt", Encoding.ASCII.GetBytes("a\r\nb\r\n"));
+            repo.Write("f.txt", "local\n");
+            var head = repo.Head;
+            var git = repo.Git;
+            git.BeforeCommand = MoveBackAfterStashing(repo, "crlf.txt");
+
+            var result = git.CreateBranch("feature", "refs/heads/main", true, "main");
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("Branch feature created from main and checked out", result.Message);
+            Assert.AreEqual("feature", repo.CurrentBranch);
+            Assert.AreEqual(head, repo.Head);
+            Assert.AreEqual("local\n", repo.Read("f.txt"));
+            Assert.AreEqual(0, git.Stashes().Count);
         }
 
         private static Action<IReadOnlyList<string>> MoveBackAfterStashing(TestRepository repo, string path)
@@ -2251,7 +2238,6 @@ namespace Upwake.Vetka.Tests
             Assert.IsFalse(result.IsSuccess);
             StringAssert.StartsWith("stash@{0} not applied, the project and the stash are unchanged\n", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(1, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -2277,7 +2263,6 @@ namespace Upwake.Vetka.Tests
             StringAssert.StartsWith("stash@{0} not applied because of conflicts, the project and the stash are unchanged",
                 result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(1, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -2469,27 +2454,15 @@ namespace Upwake.Vetka.Tests
                 {
                     File.WriteAllText(indexLock, "");
                 }
-                else if (File.Exists(indexLock))
+                else
                 {
                     File.Delete(indexLock);
                 }
             };
+            git.LockRetryTimeout = TimeSpan.Zero;
 
-            GitResult result;
-            var previous = Git.LockRetryTimeout;
-            Git.LockRetryTimeout = TimeSpan.Zero;
-            try
-            {
-                result = git.Integrate(UpdateStrategy.Merge, "other");
-            }
-            finally
-            {
-                Git.LockRetryTimeout = previous;
-                if (File.Exists(indexLock))
-                {
-                    File.Delete(indexLock);
-                }
-            }
+            var result = git.Integrate(UpdateStrategy.Merge, "other");
+            File.Delete(indexLock);
 
             StringAssert.StartsWith("Merge of other rolled back, it conflicts with local changes", result.Message);
             Assert.AreEqual("dirty\n", repo.Read("library/l.txt"));
@@ -2775,7 +2748,6 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual("Merge of other rolled back, it conflicts with local changes\nConflicts:\n  C.txt",
                 result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -2866,7 +2838,6 @@ namespace Upwake.Vetka.Tests
             StringAssert.StartsWith("Checkout of other rolled back, it conflicts with local changes\nConflicts:\n  f.txt",
                 result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, repo.Git.Stashes().Count);
         }
 
         [Test]
@@ -2964,7 +2935,6 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual((merge ? "Merge of other" : "Checkout of other") +
                             " rolled back, it conflicts with local changes\nConflicts:\n  f.txt", result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(0, git.Stashes().Count);
         }
 
         [Test]
@@ -2981,13 +2951,19 @@ namespace Upwake.Vetka.Tests
         }
 
         [Test]
-        public void CanForceDelete_OnlyForABranchThatIsNotCheckedOut()
+        public void DeleteBranch_OffersForceOnlyForABranchThatIsNotMerged()
         {
             using var repo = CreateDivergedBranches();
+            var git = repo.Git;
 
-            Assert.IsTrue(repo.Git.CanForceDelete("other"));
-            Assert.IsFalse(repo.Git.CanForceDelete("main"));
-            Assert.IsFalse(repo.Git.CanForceDelete("missing"));
+            var unmerged = git.DeleteBranch("other", false);
+            var current = git.DeleteBranch("main", false);
+            var missing = git.DeleteBranch("missing", false);
+
+            Assert.IsTrue(unmerged.IsRejected, unmerged.Message);
+            Assert.AreEqual("Branch other is not merged into the current branch or its upstream", unmerged.Message);
+            Assert.IsFalse(current.IsSuccess || current.IsRejected, current.Message);
+            Assert.IsFalse(missing.IsSuccess || missing.IsRejected, missing.Message);
         }
 
         [Test]
@@ -3053,7 +3029,6 @@ namespace Upwake.Vetka.Tests
             StringAssert.StartsWith("stash@{0} not applied because of conflicts, the project and the stash are unchanged",
                 result.Message);
             Assert.AreEqual(before, repo.Snapshot());
-            Assert.AreEqual(1, repo.Git.Stashes().Count);
             Assert.IsFalse(repo.Exists(".git/vetka-interrupted"));
         }
 
@@ -3498,21 +3473,14 @@ namespace Upwake.Vetka.Tests
             using var repo = CreateFeatureBranch();
             var pick = Short(repo, "feature");
             repo.Write(".git/index.lock", "");
-            var previous = Git.LockRetryTimeout;
-            Git.LockRetryTimeout = TimeSpan.Zero;
-            try
-            {
-                var result = repo.Git.CherryPick(pick);
+            var git = repo.Git;
+            git.LockRetryTimeout = TimeSpan.Zero;
 
-                Assert.IsFalse(result.IsSuccess);
-                StringAssert.Contains("index.lock", result.Message);
-                StringAssert.DoesNotContain("already in", result.Message);
-            }
-            finally
-            {
-                Git.LockRetryTimeout = previous;
-                File.Delete(Path.Combine(repo.Root, ".git", "index.lock"));
-            }
+            var result = git.CherryPick(pick);
+
+            Assert.IsFalse(result.IsSuccess);
+            StringAssert.Contains("index.lock", result.Message);
+            StringAssert.DoesNotContain("already in", result.Message);
         }
 
         [Test]

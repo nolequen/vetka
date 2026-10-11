@@ -48,13 +48,7 @@ namespace Upwake.Vetka
                     return GitResult.Failure($"Tag {name} not deleted: {problem}");
                 }
 
-                var deleted = Interruptible("Deletion",
-                    () => Run("push", "--no-follow-tags", "--delete", remote, "refs/tags/" + name));
-                if (deleted.IsCancelled)
-                {
-                    return GitResult.Cancelled($"Deletion of tag {name} cancelled");
-                }
-
+                var deleted = Run("push", "--no-follow-tags", "--delete", remote, "refs/tags/" + name);
                 if (!deleted.IsSuccess)
                 {
                     return GitResult.Failure($"Tag {name} not deleted: deleting it on {remote} failed\n{deleted.Message}");
@@ -67,7 +61,7 @@ namespace Upwake.Vetka
             if (!local.IsSuccess)
             {
                 return remote != null && !note.StartsWith(",")
-                    ? GitResult.Failure($"Tag {name} deleted on {remote}, but not here\n{local.Message}")
+                    ? GitResult.Done($"Tag {name} deleted on {remote}, but not here\n{local.Message}")
                     : local;
             }
 

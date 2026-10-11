@@ -239,7 +239,7 @@ namespace Upwake.Vetka
                 () => git.Push(forceOver, shownHead, tags), result =>
             {
                 _pushing = false;
-                if (result.IsSuccess && this)
+                if (result.IsDone && this)
                 {
                     Close();
                 }
@@ -250,13 +250,22 @@ namespace Upwake.Vetka
 
                 if (result.IsRejected)
                 {
-                    RejectedPush.Offer(git, result, OnUpdatedAndPushed, tags);
+                    _pushing = true;
+                    RejectedPush.Offer(git, result, OnUpdatedAndPushed, tags, StopPushing);
                 }
                 else
                 {
                     Notification.Show(result);
                 }
-            }, reportsProgress: true, changesRepository: true);
+            }, reportsProgress: true);
+        }
+
+        private void StopPushing()
+        {
+            if (this)
+            {
+                _pushing = false;
+            }
         }
 
         private void OnUpdatedAndPushed(GitResult result)
@@ -266,7 +275,8 @@ namespace Upwake.Vetka
                 return;
             }
 
-            if (result.IsSuccess)
+            _pushing = false;
+            if (result.IsDone)
             {
                 Close();
             }

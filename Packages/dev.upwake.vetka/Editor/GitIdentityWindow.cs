@@ -24,6 +24,14 @@ namespace Upwake.Vetka
                 git.Identities,
                 identities =>
                 {
+                    if (!identities.Result.IsSuccess)
+                    {
+                        Notification.Show(
+                            GitResult.Failure($"The user identity cannot be read\n{identities.Result.Message}"));
+                        stopped?.Invoke();
+                        return;
+                    }
+
                     var settings = GitProjectSettings.instance;
                     if (identities.Local.IsComplete || settings.UseGlobalIdentity && identities.Global.IsComplete)
                     {
@@ -54,7 +62,7 @@ namespace Upwake.Vetka
                 },
                 reason =>
                 {
-                    if (reason != "Cancelled")
+                    if (reason != GitOperations.CancelledReason)
                     {
                         Notification.Show(GitResult.Failure($"The user identity cannot be read\n{reason}"));
                     }

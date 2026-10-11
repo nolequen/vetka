@@ -26,15 +26,24 @@ namespace Upwake.Vetka
                 ? PushTags.All
                 : PushTags.CurrentBranch;
 
-            if (!string.IsNullOrEmpty(_gitPath))
+            if (!string.IsNullOrEmpty(_gitPath) && System.IO.File.Exists(_gitPath))
             {
                 return;
             }
 
             var systemGitPath = Git.GetSystemGitPath();
-            if (!string.IsNullOrEmpty(systemGitPath))
+            if (string.IsNullOrEmpty(systemGitPath))
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(_gitPath))
             {
                 GitPath = systemGitPath;
+            }
+            else
+            {
+                _gitPath = systemGitPath;
             }
         }
 

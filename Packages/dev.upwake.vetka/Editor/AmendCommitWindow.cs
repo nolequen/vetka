@@ -13,7 +13,7 @@ namespace Upwake.Vetka
         private bool _isPushed;
         [NonSerialized] private bool _loading;
         [NonSerialized] private bool _loaded;
-        [NonSerialized] private bool _amendRequested;
+        [NonSerialized] private bool _amending;
 
         public static void ShowWindow(Git git, Action onAmended = null)
         {
@@ -83,7 +83,7 @@ namespace Upwake.Vetka
             EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
 
-            using (new EditorGUI.DisabledScope(_loading || string.IsNullOrWhiteSpace(_message)))
+            using (new EditorGUI.DisabledScope(_loading || _amending || string.IsNullOrWhiteSpace(_message)))
             {
                 if (GUILayout.Button("Amend", GUILayout.Width(80)))
                 {
@@ -101,13 +101,12 @@ namespace Upwake.Vetka
 
         private void Amend()
         {
-            if (_amendRequested)
+            if (_amending)
             {
                 return;
             }
 
-            _amendRequested = true;
-            EditorApplication.delayCall += () => _amendRequested = false;
+            _amending = true;
             var git = _git ??= new Git();
             var message = _message;
             var head = _head;
@@ -117,6 +116,11 @@ namespace Upwake.Vetka
                 GitOperations.Run("Git: amending the last commit", () => git.Amend(message, head),
                     result =>
                     {
+                        if (this)
+                        {
+                            _amending = false;
+                        }
+
                         if (result.IsSuccess)
                         {
                             onAmended?.Invoke();
@@ -127,7 +131,15 @@ namespace Upwake.Vetka
                         }
 
                         Notification.Show(result);
-                    }));
+                    }), StopAmending);
+        }
+
+        private void StopAmending()
+        {
+            if (this)
+            {
+                _amending = false;
+            }
         }
     }
 }

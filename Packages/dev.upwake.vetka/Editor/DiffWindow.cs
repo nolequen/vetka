@@ -69,6 +69,7 @@ namespace Upwake.Vetka
             window._commit = commit;
             window._oldPath = oldPath;
             window._compare = compare;
+            window._lines = null;
             window.minSize = new Vector2(500, 300);
             window.Refresh();
         }

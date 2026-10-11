@@ -65,9 +65,12 @@ namespace Upwake.Vetka
         public static void Integrate(Git git, UpdateStrategy strategy, GitBranch branch, Action onCompleted)
         {
             GitIdentityWindow.Ensure(git, () =>
-                Run($"Git: {strategy} of {branch.Name}", () => git.Integrate(strategy, branch.Ref, branch.Name),
+                Run(IntegrationTitle(strategy, branch.Name), () => git.Integrate(strategy, branch.Ref, branch.Name),
                     onCompleted));
         }
+
+        public static string IntegrationTitle(UpdateStrategy strategy, string target) =>
+            strategy == UpdateStrategy.Rebase ? $"Git: rebasing onto {target}" : $"Git: merging {target}";
 
         public static void Delete(Git git, string name, Action onCompleted)
         {
@@ -76,15 +79,9 @@ namespace Upwake.Vetka
                 return;
             }
 
-            var unmerged = false;
-            GitOperations.Run($"Git: deleting {name}", () =>
+            GitOperations.Run($"Git: deleting {name}", () => git.DeleteBranch(name, false), result =>
             {
-                var delete = git.DeleteBranch(name, false);
-                unmerged = !delete.IsSuccess && git.CanForceDelete(name);
-                return delete;
-            }, result =>
-            {
-                if (result.IsSuccess || !unmerged)
+                if (!result.IsRejected)
                 {
                     Complete(result, onCompleted);
                     return;

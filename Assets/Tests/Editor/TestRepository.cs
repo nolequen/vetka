@@ -114,7 +114,9 @@ namespace Upwake.Vetka.Tests
             var repository = new TestRepository(Path.Combine(baseDirectory, name), baseDirectory, true);
             Directory.CreateDirectory(repository.Root);
             repository.RunGit("init", "-q", "-b", "main");
-            repository.Configure();
+            File.AppendAllText(Path.Combine(repository.Root, ".git", "config"),
+                "[user]\n\tname = Test\n\temail = test@example.com\n[core]\n\tautocrlf = false\n" +
+                "[commit]\n\tgpgsign = false\n");
             return repository;
         }
 
@@ -130,8 +132,9 @@ namespace Upwake.Vetka.Tests
         public TestRepository Clone(string name)
         {
             var clone = new TestRepository(Path.Combine(_base, name), _base, false);
-            Run(_base, _variables, "clone", "-q", "-c", "core.autocrlf=false", Root, clone.Root);
-            clone.Configure();
+            var (exitCode, output, error) = Run(_base, _variables, "clone", "-q", "-c", "core.autocrlf=false", "-c",
+                "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", Root, clone.Root);
+            Assert.AreEqual(0, exitCode, $"git clone failed:\n{error}\n{output}");
             return clone;
         }
 
@@ -187,9 +190,9 @@ namespace Upwake.Vetka.Tests
         public string Snapshot()
         {
             var snapshot = new StringBuilder();
-            snapshot.AppendLine("HEAD " + RunGit("rev-parse", "HEAD"));
-            snapshot.AppendLine("BRANCH " + RunGit("rev-parse", "--abbrev-ref", "HEAD"));
+            snapshot.AppendLine("HEAD " + RunGit("rev-parse", "HEAD", "--abbrev-ref", "HEAD"));
             snapshot.AppendLine("BRANCHES " + RunGit("for-each-ref", "--format=%(refname)", "refs/heads"));
+            snapshot.AppendLine("STASHES " + RunGit("stash", "list", "--format=%H"));
             snapshot.AppendLine("STATUS " + RunGit("status", "--porcelain=v1", "--untracked-files=all"));
             snapshot.AppendLine("UNSTAGED " + RunGit("diff"));
             snapshot.AppendLine("STAGED " + RunGit("diff", "--cached"));
@@ -219,14 +222,6 @@ namespace Upwake.Vetka.Tests
             }
 
             Directory.Delete(_base, true);
-        }
-
-        private void Configure()
-        {
-            RunGit("config", "user.name", "Test");
-            RunGit("config", "user.email", "test@example.com");
-            RunGit("config", "core.autocrlf", "false");
-            RunGit("config", "commit.gpgsign", "false");
         }
 
         private string FullPath(string path) => Path.Combine(Root, path.Replace('/', Path.DirectorySeparatorChar));

@@ -10,7 +10,7 @@ namespace Upwake.Vetka
         [NonSerialized] private Git _git;
         private List<GitStash> _stashes;
         private string _selected;
-        private string _message = "";
+        [SerializeField] private string _message = "";
         [NonSerialized] private string _pendingMessage;
         private bool _includeUntracked;
         private Vector2 _scrollPos;
@@ -230,7 +230,7 @@ namespace Upwake.Vetka
                 if (this)
                 {
                     _busy = false;
-                    if (result.IsSuccess && _message == message)
+                    if (result.IsDone && _message == message)
                     {
                         _message = "";
                         _pendingMessage = "";

@@ -267,7 +267,7 @@ namespace Upwake.Vetka
                 {
                     Notification.Show(result);
                 }
-            }, changesRepository: true);
+            });
         }
 
         private static void Rollback(List<GitFileChange> changes, List<GitFileChange> shown)
@@ -279,7 +279,7 @@ namespace Upwake.Vetka
 
             var added = shown.Count(change => change.Status == GitStatus.Added);
             var count = shown.Select(change => change.Path).Distinct().Count();
-            var files = count == 1 ? System.IO.Path.GetFileName(shown[0].Path) : $"{count} files";
+            var files = count == 1 ? Git.FileName(shown[0].Path) : $"{count} files";
             var git = new Git();
             RollbackDialog.Show($"Rollback {files}?", added, deleteAdded =>
                 GitOperations.Run("Git: rolling back changes", () => git.Rollback(changes, deleteAdded), result =>

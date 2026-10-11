@@ -222,7 +222,7 @@ namespace Upwake.Vetka
             return (page.Result, page.Commits);
         }
 
-        internal static int CommitsPerRead { get; set; } = 200;
+        internal int CommitsPerRead { get; set; } = 200;
 
         public (GitResult Result, List<string> Commits, List<string> Paths, HashSet<string> Unpushed,
             Dictionary<string, HashSet<string>> Names) FileHistory(string head, string path, bool withMeta)
@@ -423,7 +423,7 @@ namespace Upwake.Vetka
             return direct.Status == "R100" ? direct.Old : null;
         }
 
-        internal static int PathCharactersPerRead { get; set; } = 20000;
+        internal int PathCharactersPerRead { get; set; } = 20000;
 
         private (string Status, string Old, bool? SameGuid) RenamedFrom(string parent, string commit, string path,
             IEnumerable<string> deleted)
@@ -479,9 +479,9 @@ namespace Upwake.Vetka
         private static int RenameScore(string status) =>
             int.TryParse(status.Substring(1), out var score) ? score : 0;
 
-        private static string FileName(string path) => path.Substring(path.LastIndexOf('/') + 1);
+        internal static string FileName(string path) => path.Substring(path.LastIndexOf('/') + 1);
 
-        private static IEnumerable<List<string>> PathParts(IEnumerable<string> paths)
+        private IEnumerable<List<string>> PathParts(IEnumerable<string> paths)
         {
             var part = new List<string>();
             var length = 0;
@@ -562,7 +562,8 @@ namespace Upwake.Vetka
             return refs.IsSuccess ? refs.Output : null;
         }
 
-        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count)
+        public (GitResult Result, List<GitCommit> Commits, string Head) ReadLogPage(string head, int skip, int count,
+            string branchRef = null)
         {
             var none = new List<GitCommit>();
             if (head == null)
@@ -586,8 +587,20 @@ namespace Upwake.Vetka
                 return (result, none, head);
             }
 
-            var outgoing = new HashSet<string>(OutgoingCommitHashes(head, skip + count));
+            var outgoing = new HashSet<string>(OutgoingCommitHashes(PushTargetOf(branchRef), head, skip + count));
             return (result, ParseCommits(result.Output, outgoing), head);
+        }
+
+        private GitPushTarget? PushTargetOf(string branchRef)
+        {
+            if (branchRef == null)
+            {
+                return PushTarget();
+            }
+
+            return branchRef.StartsWith("refs/heads/", StringComparison.Ordinal)
+                ? PushTarget(branchRef.Substring("refs/heads/".Length), out _)
+                : null;
         }
 
         private static readonly string[] CommitFormat =
@@ -667,12 +680,12 @@ namespace Upwake.Vetka
         public string LastCommitMessage()
         {
             var result = Run("log", "-1", "--pretty=format:%B");
-            return result.IsSuccess ? result.Output : "";
+            return result.IsSuccess ? result.Output : null;
         }
 
         public bool IsHeadPushed()
         {
-            var unpushed = Run("rev-list", "-n", "1", "HEAD", "--not", "--remotes");
+            var unpushed = OutgoingLog("--format=%h", 1, "HEAD", PushTarget());
             return unpushed.IsSuccess && unpushed.Output.Length == 0;
         }
 
@@ -761,22 +774,22 @@ namespace Upwake.Vetka
 
         public List<string> OutgoingCommits(int limit = 50)
         {
-            var result = OutgoingLog("--pretty=format:%h %s", limit, "HEAD");
+            var result = OutgoingLog("--pretty=format:%h %s", limit, "HEAD", PushTarget());
             return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
                 ? new List<string>()
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).ToList();
         }
 
-        private IEnumerable<string> OutgoingCommitHashes(string tip, int limit)
+        private IEnumerable<string> OutgoingCommitHashes(GitPushTarget? target, string tip, int limit)
         {
-            var result = OutgoingLog("--pretty=format:%h", limit, tip);
+            var result = OutgoingLog("--pretty=format:%h", limit, tip, target);
             return !result.IsSuccess || string.IsNullOrWhiteSpace(result.Output)
                 ? Enumerable.Empty<string>()
                 : result.Output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
-        private GitResult OutgoingLog(string format, int limit, string tip) =>
-            Run(new[] { "log" }.Concat(OutgoingRange(PushTarget(), tip))
+        private GitResult OutgoingLog(string format, int limit, string tip, GitPushTarget? target) =>
+            Run(new[] { "log" }.Concat(OutgoingRange(target, tip))
                 .Concat(new[] { format, "-n", limit.ToString(), "--" })
                 .ToArray());
 

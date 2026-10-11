@@ -18,6 +18,12 @@ namespace Upwake.Vetka
             wantsMouseMove = true;
             _view = new BranchesView(new Git(), Repaint);
             _view.Reload();
+            GitOperations.RepositoryChanged += _view.Reload;
+        }
+
+        private void OnDisable()
+        {
+            GitOperations.RepositoryChanged -= _view.Reload;
         }
 
         private void OnFocus()

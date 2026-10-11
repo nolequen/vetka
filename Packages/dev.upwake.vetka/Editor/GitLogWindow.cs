@@ -26,14 +26,14 @@ namespace Upwake.Vetka
         private List<GitFileChange> _files;
         private string _selectedFile;
         private Vector2 _filesScrollPos;
-        private string _historyFile;
-        private bool _historyWithMeta;
-        private bool _historyFolder;
-        private string _historyLocal;
+        [SerializeField] private string _historyFile;
+        [SerializeField] private bool _historyWithMeta;
+        [SerializeField] private bool _historyFolder;
+        [SerializeField] private string _historyLocal;
         [NonSerialized] private History _history;
         [NonSerialized] private int _historyOffset;
         [NonSerialized] private GUIStyle _tagStyle;
-        private string _logRef;
+        [SerializeField] private string _logRef;
         [NonSerialized] private List<(string Label, string Ref)> _choices;
         [NonSerialized] private string[] _choiceLabels;
         [NonSerialized] private HashSet<string> _foreign;
@@ -53,7 +53,7 @@ namespace Upwake.Vetka
 
         public static void ShowHistory(Git git, string file, bool withMeta, bool folder = false,
             string local = null) =>
-            Open(git, file, withMeta, folder, $"History: {System.IO.Path.GetFileName(local ?? file)}", local);
+            Open(git, file, withMeta, folder, $"History: {Git.FileName(local ?? file)}", local);
 
         private static void Open(Git git, string file, bool withMeta, bool folder, string title,
             string local = null)
@@ -67,9 +67,9 @@ namespace Upwake.Vetka
                 window._historyFile = file;
                 window._historyWithMeta = withMeta;
                 window._historyFolder = folder;
-                window.titleContent = new GUIContent(title);
             }
 
+            window.titleContent = new GUIContent(title);
             window._git = git;
             window._historyLocal = local;
             window.minSize = new Vector2(520, 300);
@@ -99,7 +99,7 @@ namespace Upwake.Vetka
                 var page = new FirstPage { Branch = branch, Branches = git.Branches() };
                 var tip = logRef != null && logRef != "refs/heads/" + branch ? git.CommitOf(logRef) : null;
                 page.LogRef = tip != null ? logRef : null;
-                var log = git.ReadLogPage(tip, 0, count);
+                var log = git.ReadLogPage(tip, 0, count, page.LogRef);
                 page.Result = log.Result;
                 page.Commits = log.Commits;
                 page.Head = log.Head;
@@ -148,7 +148,17 @@ namespace Upwake.Vetka
         private static (GitResult Result, List<GitCommit> Commits) ToPage(
             (GitResult Result, List<GitCommit> Commits, string Head) log) => (log.Result, log.Commits);
 
-        private void OnEnable() => GitOperations.RepositoryChanged += Refresh;
+        private void OnEnable()
+        {
+            _historyFile = NullIfEmpty(_historyFile);
+            _historyLocal = NullIfEmpty(_historyLocal);
+            _logRef = NullIfEmpty(_logRef);
+            _selected = NullIfEmpty(_selected);
+            _selectedFile = NullIfEmpty(_selectedFile);
+            GitOperations.RepositoryChanged += Refresh;
+        }
+
+        private static string NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
 
         private void OnDisable() => GitOperations.RepositoryChanged -= Refresh;
 
@@ -271,7 +281,7 @@ namespace Upwake.Vetka
             {
                 var read = history != null
                     ? git.ReadCommits(history.Commits.Skip(offset).Take(PageSize).ToList(), history.Unpushed)
-                    : ToPage(git.ReadLogPage(head, skip, PageSize));
+                    : ToPage(git.ReadLogPage(head, skip, PageSize, logRef));
                 var foreign = history == null && logRef != null && read.Result.IsSuccess
                     ? git.CommitsMissingFromHead(head, skip + PageSize)
                     : null;
@@ -602,7 +612,7 @@ namespace Upwake.Vetka
             NewTagWindow.Show($"{commit.Hash} {commit.Subject}", (name, message) =>
             {
                 void Create() => GitOperations.Run($"Git: creating tag {name}",
-                    () => git.CreateTag(name, commit.Hash, message), OnTagChanged, changesRepository: true);
+                    () => git.CreateTag(name, commit.Hash, message), OnTagChanged);
 
                 if (string.IsNullOrWhiteSpace(message))
                 {
@@ -631,8 +641,7 @@ namespace Upwake.Vetka
                     return;
                 }
 
-                GitOperations.Run($"Git: deleting tag {name}", () => git.DeleteTag(name, choice == 2), OnTagChanged,
-                    changesRepository: true);
+                GitOperations.Run($"Git: deleting tag {name}", () => git.DeleteTag(name, choice == 2), OnTagChanged);
             });
         }
 

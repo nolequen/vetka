@@ -46,7 +46,7 @@ namespace Upwake.Vetka
 
         private static string GitPathOf(string text) => (text ?? "").Trim().Trim('"').Trim();
 
-        private static void ApplyDraft()
+        private static void ApplyDraft(bool chosen = false)
         {
             if (_draft == null)
             {
@@ -54,7 +54,7 @@ namespace Upwake.Vetka
             }
 
             var path = GitPathOf(_draft);
-            if (path != GitSettings.GitPath)
+            if (chosen || path != GitSettings.GitPath)
             {
                 SetGitPath(path);
             }
@@ -88,7 +88,7 @@ namespace Upwake.Vetka
                 if (editing && current.type == EventType.KeyDown &&
                     (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter))
                 {
-                    ApplyDraft();
+                    ApplyDraft(true);
                 }
                 else if (!editing)
                 {
@@ -106,7 +106,7 @@ namespace Upwake.Vetka
                     {
                         GUIUtility.keyboardControl = 0;
                         _draft = GitPathOf(selected);
-                        ApplyDraft();
+                        ApplyDraft(true);
                     }
                 }
 

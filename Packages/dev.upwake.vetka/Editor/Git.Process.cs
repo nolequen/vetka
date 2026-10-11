@@ -130,10 +130,10 @@ namespace Upwake.Vetka
             }
 
             SetVariables(startInfo, environment);
+            BeforeCommand?.Invoke(arguments);
 
             try
             {
-                BeforeCommand?.Invoke(arguments);
                 using var process = new Process { StartInfo = startInfo };
                 process.Start();
                 using var job = ProcessJob.Attach(process);
@@ -209,11 +209,11 @@ namespace Upwake.Vetka
 
         private const int PollMilliseconds = 100;
 
-        internal static TimeSpan ReadingTimeout { get; set; } = TimeSpan.FromMinutes(5);
+        internal TimeSpan ReadingTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
-        internal static TimeSpan NetworkSilenceTimeout { get; set; } = TimeSpan.FromMinutes(5);
+        internal TimeSpan NetworkSilenceTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
-        internal static TimeSpan LockRetryTimeout { get; set; } = TimeSpan.FromSeconds(5);
+        internal TimeSpan LockRetryTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
         private static int CommandIndex(IReadOnlyList<string> arguments)
         {
@@ -261,7 +261,7 @@ namespace Upwake.Vetka
             return ReadingCommands.Contains(name) ? CommandKind.Reading : CommandKind.Changing;
         }
 
-        private static GitResult? WaitForExit(Process process, CommandKind kind, Activity activity,
+        private GitResult? WaitForExit(Process process, CommandKind kind, Activity activity,
             OperationContext context, string command)
         {
             var running = Stopwatch.StartNew();

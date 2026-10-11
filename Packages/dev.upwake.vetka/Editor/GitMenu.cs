@@ -31,7 +31,7 @@ namespace Upwake.Vetka
         private static void UpdateProject(Git git, UpdateStrategy strategy)
         {
             GitIdentityWindow.Ensure(git, () => GitOperations.Run(
-                $"Git: {strategy} of the incoming changes",
+                BranchActions.IntegrationTitle(strategy, "the incoming changes"),
                 () => git.UpdateProject(strategy),
                 Notification.Show,
                 refreshAssets: true,
