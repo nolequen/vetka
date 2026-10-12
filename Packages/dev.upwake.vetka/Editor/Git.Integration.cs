@@ -15,6 +15,12 @@ namespace Upwake.Vetka
 
         public GitResult UpdateProject(UpdateStrategy strategy)
         {
+            var busy = RefuseDuringOperation(UpdateProjectName);
+            if (busy.HasValue)
+            {
+                return busy.Value;
+            }
+
             var branch = CheckedOutBranch("update", out var refusal);
             if (branch == null)
             {
@@ -29,39 +35,29 @@ namespace Upwake.Vetka
             }
 
             var after = before == null ? null : FetchedRefs();
-            var upstream = UpstreamBranch(out var upstreamError);
-            if (string.IsNullOrEmpty(upstream))
+            var source = ResolveUpstream(branch);
+            if (source.Problem != null)
             {
-                var merge = Run("config", "--get", $"branch.{branch}.merge");
-                var remote = Run("config", "--get", $"branch.{branch}.remote");
-                if (upstreamError.Message.Contains("not stored as a remote-tracking branch") &&
-                    merge.Output.StartsWith("refs/heads/", StringComparison.Ordinal) &&
-                    Run("config", "--get", $"remote.{remote.Output}.url").IsSuccess)
-                {
-                    var tracked = new GitPushTarget(remote.Output, merge.Output.Substring("refs/heads/".Length), false);
-                    var fetched = Interruptible("Update", () => FetchBranch(tracked));
-                    if (fetched.IsCancelled || !fetched.IsSuccess && !BranchMissing(fetched))
-                    {
-                        return fetched;
-                    }
+                return GitResult.Failure(source.Problem);
+            }
 
-                    if (fetched.IsSuccess)
-                    {
-                        upstream = tracked.Name;
-                        after = before == null ? null : FetchedRefs();
-                    }
-                    else
-                    {
-                        Run("update-ref", "-d", tracked.TrackingRef);
-                    }
+            var upstream = source.Name;
+            if (source.NotStored)
+            {
+                var tracked = source.Tracked.Value;
+                var fetched = Interruptible("Update", () => FetchBranch(tracked));
+                if (fetched.IsCancelled || !fetched.IsSuccess && !BranchMissing(fetched))
+                {
+                    return fetched;
                 }
 
-                if (string.IsNullOrEmpty(upstream))
+                if (!fetched.IsSuccess)
                 {
-                    return GitResult.Failure(merge.IsSuccess && merge.Output.Length > 0
-                        ? $"The upstream of {branch} ({merge.Output}) no longer exists, it was probably deleted on the remote"
-                        : $"Branch {branch} has no upstream to update from");
+                    Run("update-ref", "-d", tracked.TrackingRef);
+                    return GitResult.Failure(source.GoneText);
                 }
+
+                after = before == null ? null : FetchedRefs();
             }
 
             var integrated = Integrate(strategy, upstream);
@@ -148,6 +144,97 @@ namespace Upwake.Vetka
             return NotPushed(updated, push, warned);
         }
 
+        private const string UpdateProjectName = "Update Project";
+
+        private sealed class UpstreamSource
+        {
+            public string Name;
+            public string Ref;
+            public string Remote;
+            public string MergeRef;
+            public bool Local;
+            public bool NotStored;
+            public bool Missing;
+            public GitPushTarget? Tracked;
+            public string GoneText;
+            public string Problem;
+        }
+
+        private UpstreamSource ResolveUpstream(string branch)
+        {
+            var merge = Run("config", "--get", $"branch.{branch}.merge").Output;
+            var remote = Run("config", "--get", $"branch.{branch}.remote").Output;
+            var source = new UpstreamSource
+            {
+                Remote = remote, MergeRef = merge, Local = remote == ".",
+                GoneText = $"The upstream of {branch} ({merge}) no longer exists, it was probably deleted on the remote"
+            };
+            var full = Run("rev-parse", "--symbolic-full-name", "@{u}");
+            if (full.IsSuccess && full.Output.Length > 0)
+            {
+                var name = Run("rev-parse", "--abbrev-ref", "@{u}");
+                source.Ref = full.Output;
+                source.Name = name.IsSuccess && name.Output.Length > 0 ? name.Output : full.Output;
+                return source;
+            }
+
+            const string branches = "refs/heads/";
+            var notStored = full.Message.Contains("not stored as a remote-tracking branch");
+            if (merge.Length == 0)
+            {
+                source.Problem = $"Branch {branch} has no upstream to update from";
+            }
+            else if (source.Local)
+            {
+                source.Problem = $"{branch} tracks the local branch {ShortBranch(merge)}, which no longer exists";
+            }
+            else if (notStored && !merge.StartsWith(branches, StringComparison.Ordinal))
+            {
+                source.Problem = $"{branch} tracks {merge}, which is not a branch, choose a branch as its upstream";
+            }
+            else if (notStored && !Run("config", "--get", $"remote.{remote}.url").IsSuccess)
+            {
+                source.Problem = $"{branch} tracks a remote that is not configured ({remote}), set its upstream again";
+            }
+            else if (notStored)
+            {
+                var tracked = new GitPushTarget(remote, merge.Substring(branches.Length), false);
+                source.NotStored = true;
+                source.Tracked = tracked;
+                source.Name = tracked.Name;
+                source.Ref = tracked.TrackingRef;
+            }
+            else
+            {
+                source.Problem = source.GoneText;
+                if (merge.StartsWith(branches, StringComparison.Ordinal) &&
+                    Run("config", "--get", $"remote.{remote}.url").IsSuccess)
+                {
+                    var tracked = new GitPushTarget(remote, merge.Substring(branches.Length), false);
+                    source.Missing = true;
+                    source.Tracked = tracked;
+                    source.Name = tracked.Name;
+                    source.Ref = tracked.TrackingRef;
+                }
+            }
+
+            return source;
+        }
+
+        private static string ShortBranch(string reference) =>
+            reference.StartsWith("refs/heads/", StringComparison.Ordinal)
+                ? reference.Substring("refs/heads/".Length)
+                : reference;
+
+        private GitResult? RebaseRefusal(string target, string name)
+        {
+            var merges = Run("rev-list", "--merges", "--count", $"{target}..HEAD");
+            return merges.IsSuccess && merges.Output != "0"
+                ? GitResult.Failure($"Rebase onto {name} is not possible, the local commits include " +
+                                    "merge commits that a rebase would flatten, use Merge instead")
+                : (GitResult?)null;
+        }
+
         private static GitResult NotPushed(string done, GitResult push, bool onNewLine = false)
         {
             if (push.IsCancelled)
@@ -190,11 +277,10 @@ namespace Upwake.Vetka
 
             if (strategy == UpdateStrategy.Rebase && !unborn)
             {
-                var merges = Run("rev-list", "--merges", "--count", $"{target}..HEAD");
-                if (merges.IsSuccess && merges.Output != "0")
+                var flattened = RebaseRefusal(target, name);
+                if (flattened.HasValue)
                 {
-                    return GitResult.Failure($"Rebase onto {name} is not possible, the local commits include " +
-                                             "merge commits that a rebase would flatten, use Merge instead");
+                    return flattened.Value;
                 }
             }
 

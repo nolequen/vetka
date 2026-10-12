@@ -66,6 +66,13 @@ namespace Upwake.Vetka
             var head = HeadCommit();
             if (head == null)
             {
+                var first = CommitOf(change.Target);
+                var blocked = first == null ? null : FirstUpdateRefusal(change.Description, first);
+                if (blocked != null)
+                {
+                    return GitResult.Failure(blocked);
+                }
+
                 var plain = change.Apply();
                 return plain.IsSuccess ? GitResult.Success(change.Done) : plain;
             }
@@ -84,13 +91,10 @@ namespace Upwake.Vetka
                 return GitResult.Failure($"{change.Description} is not possible, {change.Target} cannot be found");
             }
 
-            var inTheWay = UntrackedInTheWay(change, head);
+            var inTheWay = UntrackedInTheWay(head, change.TargetCommit, IncomingBase(change, head));
             if (inTheWay.Count > 0)
             {
-                return GitResult.Failure(FileList(
-                                             $"{change.Description} is not possible, it would overwrite these files that Git does not track",
-                                             inTheWay) +
-                                         "\nMove or delete them and try again");
+                return GitResult.Failure(InTheWayText(change.Description, inTheWay));
             }
 
             var local = HasUncommittedChanges();
@@ -169,16 +173,16 @@ namespace Upwake.Vetka
             return result;
         }
 
-        private List<string> UntrackedInTheWay(TreeChange change, string head)
+        private List<string> UntrackedInTheWay(string head, string target, string incomingBase,
+            List<IndexEntry> index = null)
         {
-            IEnumerable<string> added = ChangedPaths("--diff-filter=A", head, change.TargetCommit);
+            IEnumerable<string> added = ChangedPaths("--diff-filter=A", head ?? EmptyTree(), target);
             if (added == null)
             {
                 return new List<string>();
             }
 
-            var from = IncomingBase(change, head);
-            var incoming = from != null ? Touched(from, change.TargetCommit) : null;
+            var incoming = incomingBase != null ? Touched(incomingBase, target) : null;
             if (incoming != null)
             {
                 added = added.Where(incoming.Contains);
@@ -191,12 +195,34 @@ namespace Upwake.Vetka
             }
 
             var root = top.Output;
-            return added.Select(path => InTheWay(root, path))
+            var candidates = added.Select(path => InTheWay(root, path))
                 .Where(path => path != null)
                 .Distinct()
-                .Where(path => Run("ls-files", "-z", "--", ":(top,icase,literal)" + path).Output.Length == 0)
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                return candidates;
+            }
+
+            var tracked = TrackedNames(index ?? IndexEntries());
+            return candidates.Where(path => !tracked.Contains(path))
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
+        }
+
+        private static HashSet<string> TrackedNames(List<IndexEntry> index)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in index ?? new List<IndexEntry>())
+            {
+                names.Add(entry.Path);
+                for (var slash = entry.Path.IndexOf('/'); slash > 0; slash = entry.Path.IndexOf('/', slash + 1))
+                {
+                    names.Add(entry.Path.Substring(0, slash));
+                }
+            }
+
+            return names;
         }
 
         private static string InTheWay(string root, string path)

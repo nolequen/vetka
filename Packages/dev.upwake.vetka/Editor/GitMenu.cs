@@ -25,6 +25,12 @@ namespace Upwake.Vetka
             });
         }
 
+        [MenuItem("Tools/Git/Incoming Changes...", false, 2)]
+        public static void OpenIncomingChangesWindow()
+        {
+            IncomingChangesWindow.ShowWindow();
+        }
+
         private static void UpdateProject(Git git, UpdateStrategy strategy)
         {
             GitIdentityWindow.Ensure(git, () => GitOperations.Run(
@@ -36,31 +42,31 @@ namespace Upwake.Vetka
             ));
         }
 
-        [MenuItem("Tools/Git/Commit...", false, 2)]
+        [MenuItem("Tools/Git/Commit...", false, 3)]
         public static void OpenChangesWindow()
         {
             ChangesWindow.ShowWindow();
         }
 
-        [MenuItem("Tools/Git/Push...", false, 3)]
+        [MenuItem("Tools/Git/Push...", false, 4)]
         public static void OpenPushWindow()
         {
             PushWindow.ShowWindow();
         }
 
-        [MenuItem("Tools/Git/Branches...", false, 3)]
+        [MenuItem("Tools/Git/Branches...", false, 4)]
         public static void OpenBranchesWindow()
         {
             BranchesWindow.ShowWindow();
         }
 
-        [MenuItem("Tools/Git/Stash...", false, 4)]
+        [MenuItem("Tools/Git/Stash...", false, 5)]
         public static void OpenStashWindow()
         {
             StashWindow.ShowWindow();
         }
 
-        [MenuItem("Tools/Git/Apply Patch...", false, 4)]
+        [MenuItem("Tools/Git/Apply Patch...", false, 5)]
         public static void ApplyPatch()
         {
             var path = EditorUtility.OpenFilePanel("Apply patch", "", "patch,diff");
@@ -74,13 +80,13 @@ namespace Upwake.Vetka
                 changesTree: true);
         }
 
-        [MenuItem("Tools/Git/Log...", false, 4)]
+        [MenuItem("Tools/Git/Log...", false, 5)]
         public static void OpenLogWindow()
         {
             GitLogWindow.ShowWindow();
         }
 
-        [MenuItem("Tools/Git/Settings...", false, 5)]
+        [MenuItem("Tools/Git/Settings...", false, 6)]
         public static void OpenSettings()
         {
             SettingsService.OpenUserPreferences(GitSettingsProvider.Path);

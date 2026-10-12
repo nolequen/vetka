@@ -182,6 +182,86 @@ namespace Upwake.Vetka.Tests
             Assert.IsTrue(preparedAfterFirst);
         }
 
+        [UnityTest]
+        public IEnumerator Read_ThatChangesRefs_TellsTheWindowsWhenItIsDone()
+        {
+            var changed = 0;
+            void Count() => changed++;
+            var generation = GitOperations.Generation;
+            var done = false;
+            GitOperations.RepositoryChanged += Count;
+            try
+            {
+                GitOperations.Read("Git: fetching fine", () => 1, _ => done = true, changesRefs: true);
+
+                yield return WaitUntil(() => done && changed > 0);
+                Assert.Greater(changed, 0);
+                Assert.Greater(GitOperations.Generation, generation);
+                Assert.IsNull(GitOperations.GuardedTitle);
+            }
+            finally
+            {
+                GitOperations.RepositoryChanged -= Count;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator Read_ThatChangesRefs_TellsTheWindowsWhenItFails()
+        {
+            LogAssert.Expect(LogType.Exception, new Regex("boom"));
+            var changed = 0;
+            void Count() => changed++;
+            string aborted = null;
+            GitOperations.RepositoryChanged += Count;
+            try
+            {
+                GitOperations.Read<int>("Git: fetching badly", () => throw new InvalidOperationException("boom"),
+                    _ => { }, reason => aborted = reason, changesRefs: true);
+
+                yield return WaitUntil(() => aborted != null && changed > 0);
+                Assert.AreEqual("Failed: boom", aborted);
+                Assert.Greater(changed, 0);
+            }
+            finally
+            {
+                GitOperations.RepositoryChanged -= Count;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator Read_ThatChangesRefs_TellsTheWindowsWhenItIsCancelled()
+        {
+            var title = $"Git: fetching slowly {Guid.NewGuid():N}";
+            var release = new ManualResetEventSlim(false);
+            var changed = 0;
+            void Count() => changed++;
+            string aborted = null;
+            GitOperations.RepositoryChanged += Count;
+            try
+            {
+                GitOperations.Read(title, () =>
+                {
+                    release.Wait(5000);
+                    return 1;
+                }, _ => { }, reason => aborted = reason, changesRefs: true);
+
+                yield return WaitUntil(() => Progress.EnumerateItems().Any(item => item.name == title));
+                var slow = Progress.EnumerateItems().First(item => item.name == title).id;
+                yield return WaitUntil(() => Progress.IsCancellable(slow));
+                Assert.IsTrue(Progress.Cancel(slow));
+                release.Set();
+                yield return WaitUntil(() => aborted != null && changed > 0);
+
+                Assert.AreEqual(GitOperations.CancelledReason, aborted);
+                Assert.Greater(changed, 0);
+            }
+            finally
+            {
+                release.Set();
+                GitOperations.RepositoryChanged -= Count;
+            }
+        }
+
         private static bool Running(int progress) =>
             Progress.Exists(progress) && Progress.GetStatus(progress) == Progress.Status.Running;
 

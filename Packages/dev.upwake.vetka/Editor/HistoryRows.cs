@@ -36,7 +36,7 @@ namespace Upwake.Vetka
         }
 
         public static void File(Rect rect, GitFileChange file, string label, ref string selected, Action open,
-            Action<GenericMenu> fillMenu, Action repaint)
+            Action<GenericMenu> fillMenu, Action repaint, string note = null, Color noteColor = default)
         {
             var current = Event.current;
             if (current.type == EventType.MouseDown && rect.Contains(current.mousePosition))
@@ -64,7 +64,17 @@ namespace Upwake.Vetka
                 EditorGUI.DrawRect(rect, GitColors.Selection);
             }
 
-            GUI.Label(rect, label, GitColors.StatusStyle(GUI.skin.label, file.Status));
+            var labelRect = rect;
+            if (!string.IsNullOrEmpty(note))
+            {
+                var content = new GUIContent(note);
+                var width = Mathf.Min(EditorStyles.miniBoldLabel.CalcSize(content).x + 4, rect.width / 2);
+                labelRect.width = Mathf.Max(0, rect.width - width - 8);
+                GUI.Label(new Rect(rect.xMax - width, rect.y, width, rect.height), content,
+                    GitColors.TextStyle(EditorStyles.miniBoldLabel, noteColor));
+            }
+
+            GUI.Label(labelRect, label, GitColors.StatusStyle(GUI.skin.label, file.Status));
         }
     }
 }

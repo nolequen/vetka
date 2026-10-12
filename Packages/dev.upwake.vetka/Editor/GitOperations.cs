@@ -20,6 +20,7 @@ namespace Upwake.Vetka
             public Action Cancelled;
             public Action Declined;
             public bool Guarded;
+            public bool ChangesRefs;
             public bool RefreshAssets;
             public bool ReportsProgress;
             public int? ProgressId;
@@ -127,18 +128,36 @@ namespace Upwake.Vetka
             }
         }
 
-        public static void Read<T>(string title, Func<T> work, Action<T> onCompleted, Action<string> onAborted = null)
+        public static void Read<T>(string title, Func<T> work, Action<T> onCompleted, Action<string> onAborted = null,
+            bool changesRefs = false)
         {
+            if (changesRefs)
+            {
+                EditorApplication.LockReloadAssemblies();
+            }
+
             Pending.Enqueue(new Operation
             {
                 Title = title,
                 Work = () => OperationContext.Interruptible(work, out _),
                 Completed = result => onCompleted((T)result),
                 Failed = exception => onAborted?.Invoke($"Failed: {exception.Message}"),
-                Cancelled = () => onAborted?.Invoke(CancelledReason)
+                Cancelled = () => onAborted?.Invoke(CancelledReason),
+                ChangesRefs = changesRefs
             });
 
             StartNext();
+        }
+
+        private static void Changed(Operation operation)
+        {
+            if (!operation.Guarded && !operation.ChangesRefs)
+            {
+                return;
+            }
+
+            Generation++;
+            RepositoryChanged?.Invoke();
         }
 
         private static void StartNext()
@@ -242,7 +261,7 @@ namespace Upwake.Vetka
         {
             try
             {
-                if (operation.Guarded)
+                if (operation.Guarded || operation.ChangesRefs)
                 {
                     EditorApplication.UnlockReloadAssemblies();
                 }
@@ -265,6 +284,7 @@ namespace Upwake.Vetka
                 {
                     Notification.Show($"{Describe(operation.Title)} cancelled");
                     operation.Cancelled?.Invoke();
+                    Changed(operation);
                     return;
                 }
 
@@ -283,11 +303,7 @@ namespace Upwake.Vetka
                     operation.Completed?.Invoke(result);
                 }
 
-                if (operation.Guarded)
-                {
-                    Generation++;
-                    RepositoryChanged?.Invoke();
-                }
+                Changed(operation);
             }
             finally
             {

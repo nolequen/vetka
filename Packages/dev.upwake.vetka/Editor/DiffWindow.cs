@@ -39,6 +39,8 @@ namespace Upwake.Vetka
         [SerializeField] private string _oldPath;
         [SerializeField] private string _commit;
         [SerializeField] private bool _compare;
+        [SerializeField] private string _from;
+        [SerializeField] private string _label;
 
         [NonSerialized] private Git _git;
         private List<DiffLine> _lines;
@@ -53,13 +55,19 @@ namespace Upwake.Vetka
         public static void ShowCompareWindow(string commit, string pathAtCommit, string localPath) =>
             Show(localPath, commit, pathAtCommit, true);
 
-        private static void Show(string path, string commit, string oldPath = null, bool compare = false)
+        public static void ShowRangeWindow(string from, string to, string path, string oldPath, string label) =>
+            Show(path, to, oldPath, false, from, label);
+
+        private static void Show(string path, string commit, string oldPath = null, bool compare = false,
+            string from = null, string label = null)
         {
             var window = GetWindow<DiffWindow>(utility: false, "Diff");
             window._path = path;
             window._commit = commit;
             window._oldPath = oldPath;
             window._compare = compare;
+            window._from = from;
+            window._label = label;
             window._lines = null;
             window._scrollPos = Vector2.zero;
             window.minSize = new Vector2(500, 300);
@@ -81,19 +89,21 @@ namespace Upwake.Vetka
             var oldPath = string.IsNullOrEmpty(_oldPath) ? null : _oldPath;
             var commit = string.IsNullOrEmpty(_commit) ? null : _commit;
             var compare = _compare;
+            var from = string.IsNullOrEmpty(_from) ? null : _from;
             GitOperations.Read(
                 "Git: reading the diff",
-                () => Parse(compare ? git.CompareWithLocal(commit, oldPath ?? path, path)
+                () => Parse(from != null ? git.RangeFileDiff(from, commit, path, oldPath)
+                    : compare ? git.CompareWithLocal(commit, oldPath ?? path, path)
                     : commit == null ? git.FileDiff(path, oldPath)
                     : git.CommitFileDiff(commit, path)),
-                lines => SetLines(path, commit, compare, lines),
-                reason => SetLines(path, commit, compare, Parse(GitResult.Failure(reason))));
+                lines => SetLines(path, commit, compare, from, lines),
+                reason => SetLines(path, commit, compare, from, Parse(GitResult.Failure(reason))));
         }
 
-        private void SetLines(string path, string commit, bool compare, List<DiffLine> lines)
+        private void SetLines(string path, string commit, bool compare, string from, List<DiffLine> lines)
         {
             if (!this || path != _path || commit != (string.IsNullOrEmpty(_commit) ? null : _commit) ||
-                compare != _compare)
+                compare != _compare || from != (string.IsNullOrEmpty(_from) ? null : _from))
             {
                 return;
             }
@@ -197,7 +207,8 @@ namespace Upwake.Vetka
             }
 
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            GUILayout.Label(string.IsNullOrEmpty(_commit) ? _path ?? ""
+            GUILayout.Label(!string.IsNullOrEmpty(_from) ? $"{_path}   {_label}"
+                : string.IsNullOrEmpty(_commit) ? _path ?? ""
                 : _compare ? $"{_oldPath ?? _path}   @ {_commit}   vs   local {_path}"
                 : $"{_path}   @ {_commit}", EditorStyles.toolbarButton);
             GUILayout.FlexibleSpace();

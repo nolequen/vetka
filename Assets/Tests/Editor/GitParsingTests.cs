@@ -40,7 +40,7 @@ namespace Upwake.Vetka.Tests
             var transient = new HashSet<string>
             {
                 "_git", "_loading", "_loadingMore", "_loaded", "_pushing", "_committing", "_busy", "_amending",
-                "_closing", "_aborted", "_moreAborted", "_focused"
+                "_closing", "_aborted", "_moreAborted", "_focused", "_fetching", "_visible", "_skipRepositoryChange"
             };
             var windows = typeof(Git).Assembly.GetTypes()
                 .Where(type => typeof(UnityEditor.EditorWindow).IsAssignableFrom(type));
@@ -222,9 +222,26 @@ namespace Upwake.Vetka.Tests
         [TestCase("Network", "push", "origin", "HEAD")]
         [TestCase("Changing", "merge", "--no-edit", "origin/main")]
         [TestCase("Changing", "stash", "list")]
+        [TestCase("Reading", "-c", "protocol.allow=never", "-c", "merge.x.driver=true", "merge-tree", "--write-tree")]
         public void CommandKind_DecidesHowLongACommandMayRun(string expected, params string[] arguments)
         {
             Assert.AreEqual(expected, Git.Kind(arguments).ToString());
+        }
+
+        [Test]
+        public void ParseTrialMerge_ReadsTheTreeAndTheConflictsOrGivesUp()
+        {
+            var tree = new string('a', 40);
+
+            var clean = Git.ParseTrialMerge(new GitResult(0, tree + "\0", ""));
+            var conflicts = Git.ParseTrialMerge(new GitResult(1, tree + "\0f.txt\0g.txt\0f.txt\0", ""));
+
+            Assert.AreEqual(tree, clean.Value.Tree);
+            Assert.AreEqual(0, clean.Value.Conflicts.Count);
+            CollectionAssert.AreEqual(new[] { "f.txt", "g.txt" }, conflicts.Value.Conflicts);
+            Assert.IsNull(Git.ParseTrialMerge(new GitResult(1, "", "merge-tree: x - not something we can merge")));
+            Assert.IsNull(Git.ParseTrialMerge(new GitResult(129, "", "usage: git merge-tree")));
+            Assert.IsNull(Git.ParseTrialMerge(new GitResult(128, "", "refusing to merge unrelated histories")));
         }
 
         [Test]

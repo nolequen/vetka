@@ -221,6 +221,7 @@ namespace Upwake.Vetka
             var actions = new (string label, Action action)[]
             {
                 ("Update Project...", GitMenu.UpdateProject),
+                ("Incoming Changes...", GitMenu.OpenIncomingChangesWindow),
                 ("Commit...", GitMenu.OpenChangesWindow),
                 ("Push...", GitMenu.OpenPushWindow),
                 ("New Branch...", () => BranchActions.NewBranch(_git, current ?? "HEAD", "HEAD"))

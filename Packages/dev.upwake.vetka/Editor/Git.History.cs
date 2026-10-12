@@ -126,6 +126,11 @@ namespace Upwake.Vetka
             return lines;
         }
 
+        public GitResult RangeFileDiff(string from, string to, string path, string oldPath) =>
+            Run(new[] { "diff", "--find-renames", "--no-color", "--no-ext-diff", from, to }
+                .Concat(PathFilter(new[] { oldPath ?? path, path }.Distinct()))
+                .ToArray());
+
         public GitResult CommitFileDiff(string commit, string path) =>
             Run("show", "--diff-merges=first-parent", "--format=", "--no-color", "--no-ext-diff", commit, "--",
                 ":(top,literal)" + path);

@@ -18,6 +18,10 @@ namespace Upwake.Vetka
             _ => Skin(Color.gray, new Color(0.4f, 0.4f, 0.4f))
         };
 
+        public static Color Danger => Skin(new Color(1f, 0.45f, 0.4f), new Color(0.75f, 0.05f, 0.05f));
+
+        public static Color Caution => Skin(new Color(1f, 0.7f, 0.3f), new Color(0.65f, 0.35f, 0f));
+
         public static Color Unpushed => Skin(new Color(0.55f, 0.85f, 1f), new Color(0f, 0.33f, 0.6f));
 
         public static Color Tag => Skin(new Color(0.45f, 0.39f, 0.18f), new Color(0.98f, 0.87f, 0.52f));

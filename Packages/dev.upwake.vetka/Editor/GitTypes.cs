@@ -246,4 +246,64 @@ namespace Upwake.Vetka
         public List<GitCommit> OnlyCurrent = new List<GitCommit>();
         public List<GitFileChange> Files = new List<GitFileChange>();
     }
+
+    internal enum IncomingMark
+    {
+        Conflict,
+        ConflictsWithYourChanges,
+        InTheWay,
+        InUse,
+        HiddenChange,
+        MayConflict,
+        ChangedLocally,
+        Unsaved,
+        None
+    }
+
+    internal sealed class IncomingCache
+    {
+        public string Head;
+        public string Tip;
+        public string ResultTree;
+        public bool Exact;
+        public bool Partial;
+        public bool ConflictsUnlisted;
+        public string Note;
+        public IReadOnlyList<GitFileChange> Files = new List<GitFileChange>();
+        public IReadOnlyList<string> Conflicted = new List<string>();
+        public IReadOnlyList<string> MayConflict = new List<string>();
+        public IReadOnlyList<string> BothSides = new List<string>();
+    }
+
+    internal sealed class GitIncoming
+    {
+        public GitResult Result = GitResult.Success("");
+        public string Branch;
+        public string Upstream;
+        public bool LocalUpstream;
+        public string Head;
+        public string Tip;
+        public string MergeBase;
+        public string ResultTree;
+        public string DiffFrom;
+        public string DiffTo;
+        public string DiffLabel;
+        public string Prefix = "";
+        public string Summary;
+        public string Action;
+        public int IncomingCount;
+        public List<GitCommit> Incoming = new List<GitCommit>();
+        public int FileCount;
+        public List<GitFileChange> Files = new List<GitFileChange>();
+        public Dictionary<string, IncomingMark> Marks = new Dictionary<string, IncomingMark>(StringComparer.Ordinal);
+        public List<string> Conflicted = new List<string>();
+        public List<string> Refusals = new List<string>();
+        public List<string> Warnings = new List<string>();
+        public string Note;
+        public DateTime? LastFetch;
+        public IncomingCache Cache;
+
+        public IncomingMark MarkOf(GitFileChange file) =>
+            Marks.TryGetValue(file.Path, out var mark) ? mark : IncomingMark.None;
+    }
 }

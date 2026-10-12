@@ -201,8 +201,9 @@ namespace Upwake.Vetka
 
         private static readonly HashSet<string> ReadingCommands = new HashSet<string>
         {
-            "--version", "blame", "check-ref-format", "diff", "for-each-ref", "log", "ls-files", "ls-tree", "merge-base",
-            "reflog", "rev-list", "rev-parse", "show", "status", "symbolic-ref"
+            "--version", "blame", "check-attr", "check-ref-format", "diff", "diff-files", "for-each-ref", "log",
+            "ls-files", "ls-tree", "merge-base", "merge-tree", "reflog", "rev-list", "rev-parse", "show", "status",
+            "symbolic-ref"
         };
 
         private const int PollMilliseconds = 100;
@@ -216,7 +217,7 @@ namespace Upwake.Vetka
         private static int CommandIndex(IReadOnlyList<string> arguments)
         {
             var i = 0;
-            while (i < arguments.Count && arguments[i] == "-C")
+            while (i < arguments.Count && (arguments[i] == "-C" || arguments[i] == "-c"))
             {
                 i += 2;
             }

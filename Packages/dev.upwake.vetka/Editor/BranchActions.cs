@@ -16,6 +16,11 @@ namespace Upwake.Vetka
             Menus.Add(menu, "Checkout", !branch.IsCurrent, () => Checkout(git, branch));
             Menus.Add(menu, $"New Branch from '{shownName}'...", true,
                 () => NewBranch(git, branch.Name, branch.Ref));
+            if (!branch.IsRemote)
+            {
+                Menus.Add(menu, "Incoming Changes...", branch.IsCurrent, GitMenu.OpenIncomingChangesWindow);
+            }
+
             Menus.Add(menu, $"Compare with '{shownCurrent}'", !branch.IsCurrent,
                 () => CompareBranchWindow.ShowWindow(branch.Ref, branch.Name));
             menu.AddSeparator("");
