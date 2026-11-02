@@ -1,6 +1,6 @@
 # Vetka – Git for Unity
 
-[![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/nolequen/vetka/releases/latest)
+[![Version 0.2.0](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/nolequen/vetka/releases/latest)
 [![Unity 6.0+](https://img.shields.io/badge/Unity-6.0%2B-black?logo=unity)](Packages/dev.upwake.vetka/README.md#requirements)
 [![Website](https://img.shields.io/badge/docs-upwake.dev%2Fvetka-blue)](https://upwake.dev/vetka/)
 [![License](https://img.shields.io/badge/license-lightgrey)](LICENSE.md)
@@ -27,4 +27,5 @@ these ways:
 ## License
 
 Proprietary, all rights reserved – see [LICENSE.md](LICENSE.md). Copies obtained from the Unity
-Asset Store are licensed under the Asset Store EULA.
+Asset Store are licensed under the Asset Store EULA, copies obtained from the Unity China Asset
+Store under its Terms of Service and EULA.

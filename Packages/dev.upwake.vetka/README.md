@@ -9,19 +9,28 @@ hosting you already use.
 - **Never left half-merged** – Update Project, merge, rebase, checkout and applying a stash either
   finish or are rolled back completely, with your local changes restored.
 - **Changes tab** – a dockable tab with tracked changes and unversioned files, moves and renames
-  shown as one row, *Commit* and *Commit and Push*, commit message history.
-- **Update Project** – fetch, then merge or rebase the upstream branch.
-- **Push** – outgoing commits, upstream set automatically for new branches.
+  shown as one row, *Commit* and *Commit and Push*, commit message history, a resizable commit
+  message field.
+- **Update Project** – fetch, then merge or rebase the upstream branch; afterwards it lists the
+  branches and tags the fetch changed.
+- **Incoming Changes** – what Update Project would bring, before running it (**Tools → Git →
+  Incoming Changes...**).
+- **Push** – outgoing commits, upstream set automatically for new branches, tags, force push with a
+  lease; when the push is rejected, an offer to update and push again.
 - **Branches** – local, remote and recent branches with search and favourites; checkout, new
-  branch, merge, rebase, delete.
-- **Log** – recent commits and their files, *Amend last commit*, *Undo last commit*.
+  branch, merge, rebase, delete; compare a branch with the current one: commits on each side and
+  files that differ.
+- **Log** – any branch, loaded in portions as it scrolls; commits and their files, *Amend last
+  commit*, *Undo last commit*, cherry-pick and revert; tags: create, delete, push.
+- **File history** – the history of a file or folder, *Compare with Local*, *Get This Version*,
+  blame of a revision.
 - **Stash** – stash, apply, pop and drop.
 - **Patches** – create a patch from selected files, apply a patch file.
 - **Diff and Blame** windows.
-- **File actions** in the Changes tab and the Project window: Show Diff, Blame, Add to Git,
-  Rollback, Create Patch.
-- **Git status badges** in the Project window and the current branch in the main window title
-  (Unity 6.0 or newer).
+- **File actions** in the Changes tab and the Project window: Show Diff, Blame, Show History, Add
+  to Git, Rollback, Create Patch.
+- **Git status badges** in the Project window.
+- **The current branch in the main window title** (Unity 6.0 or newer).
 
 ## Requirements
 
@@ -46,6 +55,7 @@ Documentation: [upwake.dev/vetka](https://upwake.dev/vetka/). Release history: [
 ## License
 
 Proprietary, all rights reserved – see [LICENSE.md](LICENSE.md). Copies obtained from the Unity
-Asset Store are licensed under the Asset Store EULA.
+Asset Store are licensed under the Asset Store EULA, copies obtained from the Unity China Asset
+Store under its Terms of Service and EULA.
 
 Contact: [vetka@upwake.dev](mailto:vetka@upwake.dev)

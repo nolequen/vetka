@@ -5,7 +5,9 @@ publish, distribute, sublicense or sell the software, in whole or in part, is gr
 repository.
 
 Copies obtained from the Unity Asset Store are licensed to their purchaser under the Unity Asset
-Store Terms of Service and EULA (https://unity.com/legal/as-terms).
+Store Terms of Service and EULA (https://unity.com/legal/as-terms). Copies obtained from the Unity
+China Asset Store are licensed to their purchaser under the Unity China Asset Store Terms of
+Service and EULA (https://assetstore.u3d.cn/legal/terms-of-service-and-eula).
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
 NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
