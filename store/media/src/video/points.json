@@ -1,0 +1,110 @@
+{
+  "import.button": {
+    "window": "UnityEditor.PackageImport",
+    "corner": "br",
+    "x": -37,
+    "y": -17
+  },
+  "commit.file1": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "tl",
+    "x": 27,
+    "y": 213
+  },
+  "commit.file2": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "tl",
+    "x": 27,
+    "y": 153
+  },
+  "commit.message": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "bl",
+    "x": 150,
+    "y": -44
+  },
+  "commit.button": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "br",
+    "x": -155,
+    "y": 3
+  },
+  "commit.file3": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "tl",
+    "x": 27,
+    "y": 233
+  },
+  "incoming.update": {
+    "window": "Upwake.Vetka.IncomingChangesWindow",
+    "corner": "br",
+    "x": -58,
+    "y": 9
+  },
+  "push.button": {
+    "window": "Upwake.Vetka.PushWindow",
+    "corner": "br",
+    "x": -302,
+    "y": -12
+  },
+  "branches.search": {
+    "window": "Upwake.Vetka.BranchesWindow",
+    "corner": "tl",
+    "x": 188,
+    "y": 36
+  },
+  "branches.new": {
+    "window": "Upwake.Vetka.BranchesWindow",
+    "corner": "tl",
+    "x": 48,
+    "y": 142
+  },
+  "branches.first": {
+    "window": "Upwake.Vetka.BranchesWindow",
+    "corner": "tl",
+    "x": 83,
+    "y": 82
+  },
+  "branches.menu.checkout": {
+    "window": "Upwake.Vetka.BranchesWindow",
+    "corner": "tl",
+    "x": 423,
+    "y": 105
+  },
+  "branches.menu.merge": {
+    "window": "Upwake.Vetka.BranchesWindow",
+    "corner": "tl",
+    "x": 443,
+    "y": 202
+  },
+  "log.commit": {
+    "window": "Upwake.Vetka.GitLogWindow",
+    "corner": "tl",
+    "x": 294,
+    "y": 93
+  },
+  "log.file": {
+    "window": "Upwake.Vetka.GitLogWindow",
+    "corner": "tl",
+    "x": 94,
+    "y": 499
+  },
+  "changes.file": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "tl",
+    "x": 92,
+    "y": 53
+  },
+  "changes.menu.diff": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "tl",
+    "x": 155,
+    "y": 67
+  },
+  "changes.menu.blame": {
+    "window": "Upwake.Vetka.ChangesWindow",
+    "corner": "tl",
+    "x": 146,
+    "y": 111
+  }
+}

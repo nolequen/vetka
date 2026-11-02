@@ -1,3 +1,4 @@
+import argparse
 import os
 import shutil
 import subprocess
@@ -6,8 +7,10 @@ from pathlib import Path
 
 import files as f
 
-ROOT = Path(r"E:\projects\vetka\store\demo")
-REMOTE = Path(r"E:\projects\vetka\store\demo-remote.git")
+parser = argparse.ArgumentParser()
+parser.add_argument("--project", default=r"E:\projects\vetka\store\demo")
+ROOT = Path(parser.parse_args().project)
+REMOTE = ROOT.parent / (ROOT.name + "-remote.git")
 S = "Assets/Game/Scripts/"
 ALEX = ("Alex Morgan", "alex@skyward.example")
 KATE = ("Kate Lin", "kate@skyward.example")
@@ -63,6 +66,8 @@ subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(REMOTE)], check
 
 git("init", "-q", "-b", "main")
 git("config", "core.autocrlf", "false")
+git("config", "user.name", ALEX[0])
+git("config", "user.email", ALEX[1])
 git("remote", "add", "origin", str(REMOTE))
 
 final_player = (ROOT / (S + "Player/PlayerController.cs")).read_text(encoding="utf-8")

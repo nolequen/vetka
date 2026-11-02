@@ -1,10 +1,16 @@
+import argparse
 import json
 import subprocess
 from pathlib import Path
 
 import files as f
 
-ROOT = Path(r"E:\projects\vetka\store\demo")
+parser = argparse.ArgumentParser()
+parser.add_argument("--project", default=r"E:\projects\vetka\store\demo")
+parser.add_argument("--no-package", action="store_true")
+arguments = parser.parse_args()
+
+ROOT = Path(arguments.project)
 TGZ = ROOT / "LocalPackages/dev.upwake.vetka-0.1.0.tgz"
 SCRIPTS = ROOT / "Assets/Game/Scripts"
 
@@ -32,12 +38,13 @@ write(ROOT / "Assets/Game/Docs/BossFight.md", f.DESIGN_NOTES)
 write(ROOT / "Assets/Editor/DemoSetup.cs", f.SETUP)
 write(ROOT / ".gitignore", f.GITIGNORE)
 
-TGZ.parent.mkdir(parents=True, exist_ok=True)
-subprocess.run(["git", "-C", r"E:\projects\vetka", "archive", "--format=tar.gz", "--prefix=package/",
-                "-o", str(TGZ), "v0.1.0:Packages/dev.upwake.vetka"], check=True)
+if not arguments.no_package:
+    TGZ.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", r"E:\projects\vetka", "archive", "--format=tar.gz", "--prefix=package/",
+                    "-o", str(TGZ), "v0.1.0:Packages/dev.upwake.vetka"], check=True)
 
-manifest = ROOT / "Packages/manifest.json"
-data = json.loads(manifest.read_text(encoding="utf-8"))
-data["dependencies"]["dev.upwake.vetka"] = "file:" + TGZ.as_posix()
-manifest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+    manifest = ROOT / "Packages/manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["dependencies"]["dev.upwake.vetka"] = "file:" + TGZ.as_posix()
+    manifest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
 print("phase A written")

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  body { width: 1920px; height: 1080px; position: relative; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+  .net { position: absolute; inset: 0; }
+  .head { position: absolute; left: 130px; top: 110px; display: flex; align-items: center; gap: 44px; }
+  .mark { width: 128px; height: 128px; border-radius: 30px; display: flex; align-items: center; justify-content: center; box-shadow: 0 20px 50px rgba(0,0,0,0.35); }
+  .name { font-size: 92px; }
+  .tag { font-size: 40px; margin-top: 18px; }
+  .tiles { position: absolute; left: 130px; right: 130px; top: 350px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 30px; }
+  .tile { height: 270px; padding: 36px 34px; border-radius: 26px; background: rgba(108, 197, 143, 0.10); border: 2px solid rgba(108, 197, 143, 0.30); }
+  .tile.key { background: rgba(217, 166, 70, 0.12); border-color: rgba(217, 166, 70, 0.45); }
+  .tile h2 { font-size: 38px; font-weight: 700; color: #eef3ef; margin-bottom: 22px; }
+  .tile.key h2 { color: #f0c873; }
+  .tile p { font-size: 27px; line-height: 1.5; color: #a9c7b4; }
+  .nw { white-space: nowrap; }
+  .site { position: absolute; left: 0; right: 0; bottom: 64px; text-align: center; font-size: 30px; font-weight: 600; color: #6cc58f; letter-spacing: 0.04em; font-family: "Segoe UI", sans-serif; }
+</style>
+</head>
+<body class="dark">
+  <svg class="net" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" stroke-linecap="round">
+    <g stroke="#3a9a62" stroke-width="5" opacity="0.25">
+      <path d="M1840 60 L1600 170 L1680 300 L1460 260"/>
+      <path d="M1600 170 L1380 90 L1240 200"/>
+      <path d="M60 1020 L260 960 L420 1040"/>
+      <path d="M1860 1020 L1660 960 L1500 1040"/>
+    </g>
+    <g fill="#18191c" stroke-width="6" stroke-opacity="0.5">
+      <circle cx="1840" cy="60" r="14" stroke="#3a9a62"/>
+      <circle cx="1600" cy="170" r="18" stroke="#6cc58f"/>
+      <circle cx="1680" cy="300" r="14" stroke="#d9a646"/>
+      <circle cx="1460" cy="260" r="14" stroke="#3a9a62"/>
+      <circle cx="1380" cy="90" r="12" stroke="#3a9a62"/>
+      <circle cx="1240" cy="200" r="14" stroke="#6cc58f"/>
+      <circle cx="60" cy="1020" r="12" stroke="#3a9a62"/>
+      <circle cx="260" cy="960" r="14" stroke="#6cc58f"/>
+      <circle cx="420" cy="1040" r="12" stroke="#3a9a62"/>
+      <circle cx="1860" cy="1020" r="12" stroke="#3a9a62"/>
+      <circle cx="1660" cy="960" r="14" stroke="#6cc58f"/>
+      <circle cx="1500" cy="1040" r="12" stroke="#3a9a62"/>
+    </g>
+  </svg>
+  <div class="head">
+    <div class="mark green">
+      <svg width="92" height="92" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round">
+        <circle cx="8" cy="5" r="2.5"/><circle cx="8" cy="19" r="2.5"/><circle cx="17" cy="7" r="2.5"/>
+        <path d="M8 7.5v9"/><path d="M8 15.5c0-4.5 9-3.5 9-6"/>
+      </svg>
+    </div>
+    <div>
+      <div class="name">Vetka – Git for Unity</div>
+      <div class="tag">团结引擎编辑器内功能完整的 Git 客户端</div>
+    </div>
+  </div>
+  <div class="tiles">
+    <div class="tile"><h2>提交与推送</h2><p>Changes 标签页：勾选文件，填写信息，Commit 或 <span class="nw">Commit and Push</span></p></div>
+    <div class="tile key"><h2>冲突即回滚</h2><p><span class="nw">Update Project</span>、merge、rebase 遇冲突完整回滚，本地修改不丢失</p></div>
+    <div class="tile"><h2>预览更新</h2><p><span class="nw">Incoming Changes</span>：拉取之前先查看队友推送了什么</p></div>
+    <div class="tile"><h2>分支与比较</h2><p>checkout、merge、rebase，与当前分支比较提交和文件</p></div>
+    <div class="tile"><h2>提交日志</h2><p>任意分支的日志，<span class="nw">cherry-pick</span> 和 revert</p></div>
+    <div class="tile"><h2>标签与强制推送</h2><p>创建、删除、推送标签，<span class="nw">force push</span><br><span class="nw">(--force-with-lease)</span></p></div>
+    <div class="tile"><h2>历史与 blame</h2><p>文件和文件夹历史，diff 对比，逐行查看修改者</p></div>
+    <div class="tile"><h2>Stash 与补丁</h2><p>保存和恢复未提交的修改，创建和应用补丁</p></div>
+  </div>
+  <div class="site">UPWAKE.DEV/VETKA</div>
+</body>
+</html>
