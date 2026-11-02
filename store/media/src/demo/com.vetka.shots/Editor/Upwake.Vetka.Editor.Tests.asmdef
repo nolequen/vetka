@@ -1,0 +1,10 @@
+{
+    "name": "Upwake.Vetka.Editor.Tests",
+    "references": [
+        "Upwake.Vetka.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "autoReferenced": false
+}
