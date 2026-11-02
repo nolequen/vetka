@@ -20,11 +20,12 @@ hosting you already use.
 - **Diff and Blame** windows.
 - **File actions** in the Changes tab and the Project window: Show Diff, Blame, Add to Git,
   Rollback, Create Patch.
-- **Git status badges** in the Project window and the current branch in the main window title.
+- **Git status badges** in the Project window and the current branch in the main window title
+  (Unity 6.0 or newer).
 
 ## Requirements
 
-- Unity 6.0 LTS or newer.
+- Unity 6.0 LTS or newer; in the Unity China Asset Store, Tuanjie 1.6 or newer.
 - Git 2.31 or newer, installed separately.
 - The Unity project inside a Git repository.
 - Working Git authentication: if `git fetch` works in a terminal, it works in Vetka. Vetka never

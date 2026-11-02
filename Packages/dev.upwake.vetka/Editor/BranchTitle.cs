@@ -8,6 +8,7 @@ namespace Upwake.Vetka
     [InitializeOnLoad]
     internal static class BranchTitle
     {
+#if UNITY_6000_0_OR_NEWER
         private const double CheckIntervalSeconds = 1;
 
         private static string _headPath;
@@ -22,7 +23,7 @@ namespace Upwake.Vetka
             Refresh();
         }
 
-        internal static bool InRepository => FindHead(Git.ProjectRoot) != null;
+        internal static bool Supported => true;
 
         public static void Refresh()
         {
@@ -74,6 +75,15 @@ namespace Upwake.Vetka
                 return null;
             }
         }
+#else
+        internal static bool Supported => false;
+
+        public static void Refresh()
+        {
+        }
+#endif
+
+        internal static bool InRepository => FindHead(Git.ProjectRoot) != null;
 
         internal static string BranchName(string headContent)
         {

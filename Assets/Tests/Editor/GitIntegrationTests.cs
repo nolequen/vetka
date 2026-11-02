@@ -1707,6 +1707,73 @@ namespace Upwake.Vetka.Tests
             Assert.AreEqual("Второй коммит", repo.Git.LastCommitMessage());
         }
 
+        private const string ChinesePath = "Assets/资源/角色.prefab";
+
+        private static TestRepository CreateChineseNamedChange()
+        {
+            var repo = TestRepository.Create();
+            repo.Write(ChinesePath, "名字: 战士\n");
+            repo.CommitAll("添加角色");
+            repo.Write(ChinesePath, "名字: 法师\n");
+            return repo;
+        }
+
+        [Test]
+        public void WorkingTreeChanges_ListsAFileWithAChineseNameByItsPath()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "a\n");
+            repo.CommitAll("base");
+            repo.Write(ChinesePath, "prefab\n");
+
+            var changes = repo.Git.WorkingTreeChanges().Changes;
+
+            CollectionAssert.AreEqual(new[] { "Untracked " + ChinesePath }, changes.Select(Describe));
+        }
+
+        [Test]
+        public void Commit_WithAChineseMessage_ShowsTheMessageAndTheFileInTheLog()
+        {
+            using var repo = TestRepository.Create();
+            repo.Write("a.txt", "a\n");
+            repo.CommitAll("base");
+            repo.Write(ChinesePath, "prefab\n");
+
+            var commit = repo.Git.Commit(new[] { ChinesePath }, "添加角色预制体");
+
+            Assert.IsTrue(commit.IsSuccess, commit.Message);
+            var latest = repo.Git.ReadLogPage(null, 0, 50).Commits[0];
+            Assert.AreEqual("添加角色预制体", latest.Subject);
+            Assert.AreEqual("添加角色预制体", repo.Git.LastCommitMessage());
+            CollectionAssert.AreEqual(new[] { "Added " + ChinesePath },
+                repo.Git.CommitFiles(latest.Hash).Files.Select(Describe));
+        }
+
+        [Test]
+        public void FileDiff_OfAFileWithAChineseName_ShowsTheChange()
+        {
+            using var repo = CreateChineseNamedChange();
+
+            var diff = repo.Git.FileDiff(ChinesePath);
+
+            Assert.IsTrue(diff.IsSuccess, diff.Message);
+            StringAssert.Contains("+++ b/" + ChinesePath, diff.Output);
+            StringAssert.Contains("-名字: 战士", diff.Output);
+            StringAssert.Contains("+名字: 法师", diff.Output);
+        }
+
+        [Test]
+        public void Rollback_OfAFileWithAChineseName_RestoresIt()
+        {
+            using var repo = CreateChineseNamedChange();
+
+            var result = repo.Git.Rollback(new[] { new GitFileChange(GitStatus.Modified, ChinesePath) }, false);
+
+            Assert.IsTrue(result.IsSuccess, result.Message);
+            Assert.AreEqual("名字: 战士\n", repo.Read(ChinesePath));
+            Assert.AreEqual("", repo.RunGit("status", "--porcelain=v1", "--untracked-files=all"));
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void Rollback_OfAFileMarkedIntentToAdd_DeletesItOnlyWhenAsked(bool deleteAdded)

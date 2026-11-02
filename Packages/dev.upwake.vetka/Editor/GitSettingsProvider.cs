@@ -134,11 +134,14 @@ namespace Upwake.Vetka
             settings.UpdateStrategy =
                 (UpdateStrategyChoice)EditorGUILayout.EnumPopup(Styles.UpdateStrategy, settings.UpdateStrategy);
 
-            var showBranch = EditorGUILayout.Toggle(Styles.ShowBranchInTitle, GitSettings.ShowBranchInTitle);
-            if (showBranch != GitSettings.ShowBranchInTitle)
+            if (BranchTitle.Supported)
             {
-                GitSettings.ShowBranchInTitle = showBranch;
-                BranchTitle.Refresh();
+                var showBranch = EditorGUILayout.Toggle(Styles.ShowBranchInTitle, GitSettings.ShowBranchInTitle);
+                if (showBranch != GitSettings.ShowBranchInTitle)
+                {
+                    GitSettings.ShowBranchInTitle = showBranch;
+                    BranchTitle.Refresh();
+                }
             }
 
             var showStatus = EditorGUILayout.Toggle(Styles.ShowStatusInProject, GitSettings.ShowStatusInProject);
