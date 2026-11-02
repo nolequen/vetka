@@ -2,6 +2,7 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -62,6 +63,11 @@ def forget_editor_state(project):
     shutil.copyfile(DEFAULT_LAYOUT, layouts / "default-2022.dwlt")
 
 
+def writable_and_retry(function, path, _):
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
+
+
 def add_incoming(remote):
     clone = Path(tempfile.mkdtemp(prefix="vetka-incoming-"))
     try:
@@ -76,7 +82,7 @@ def add_incoming(remote):
             git(clone, "commit", "-q", "-am", message, author=TEAMMATE, minutes_ago=minutes_ago)
         git(clone, "push", "-q", "origin", "main")
     finally:
-        shutil.rmtree(clone, ignore_errors=True)
+        shutil.rmtree(clone, onexc=writable_and_retry)
 
 
 def main():
