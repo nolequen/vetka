@@ -2,8 +2,8 @@
 
 [![Version 0.2.0](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/nolequen/vetka/releases/latest)
 [![Unity 6.0+](https://img.shields.io/badge/Unity-6.0%2B-black?logo=unity)](Packages/dev.upwake.vetka/README.md#requirements)
+[![Tuanjie 1.6+](https://img.shields.io/badge/Tuanjie-1.6%2B-black)](Packages/dev.upwake.vetka/README.md#requirements)
 [![Website](https://img.shields.io/badge/docs-upwake.dev%2Fvetka-blue)](https://upwake.dev/vetka/)
-[![License](https://img.shields.io/badge/license-grey)](LICENSE.md)
 
 A Git client inside the Unity Editor, modelled on the version control integration of JetBrains IDEs
 (IntelliJ IDEA, Rider). It drives the regular `git` command line, so it works with any repository
