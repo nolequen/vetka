@@ -49,8 +49,6 @@
 - [ ] Иконка 160×160: `store/media/vetka-icon-160x160.png`
 - [ ] Карточка 420×280: `store/media/vetka-card-420x280.png`
 - [ ] Обложка 1950×1300: `store/media/vetka-cover-1950x1300.png`
-- [ ] Видео (установка и обзор, обязательно для инструментов): `store/media/video/vetka-setup-zh.mp4`
-  (2:01, 1920×1080, H.264, без звука, китайские субтитры). Загрузить прямо в стор, не Bilibili.
 
 ## 6. Gallery
 
@@ -63,6 +61,9 @@
 5. [ ] `store/media/shots/vetka-4-diff.png`
 6. [ ] `store/media/shots/vetka-5-blame.png`
 7. [ ] По желанию: `store/media/vetka-promo-1950x1300.png`.
+8. [ ] Видео (установка и обзор, обязательно для инструментов) в разделе Screenshots & videos:
+   `store/media/video/vetka-setup-zh.mp4` (2:01, 1920×1080, H.264, без звука, китайские субтитры), файлом с
+   компьютера. Ссылки принимаются только на Bilibili и Tencent Video.
 
 ## 7. Отправка
 
