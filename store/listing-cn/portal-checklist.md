@@ -61,9 +61,22 @@
 5. [ ] `store/media/shots/vetka-4-diff.png`
 6. [ ] `store/media/shots/vetka-5-blame.png`
 7. [ ] По желанию: `store/media/vetka-promo-1950x1300.png`.
-8. [ ] Видео (установка и обзор, обязательно для инструментов) в разделе Screenshots & videos:
-   `store/media/video/vetka-setup-zh.mp4` (2:01, 1920×1080, H.264, без звука, китайские субтитры), файлом с
-   компьютера. Ссылки принимаются только на Bilibili и Tencent Video.
+8. [ ] Видео (установка и обзор, обязательно для инструментов) в разделе Screenshots & videos, режим
+   **Links** → **Extract Video**: `https://www.bilibili.com/video/BV1iR4g68EJe` (без `/en/` и без хвоста после
+   `?`). Файлом портал видео не принимает, только ссылкой на Bilibili или Tencent Video.
+
+### Видео на Bilibili
+
+`BV1iR4g68EJe` загружено 2026-11-03 с аккаунта `bili_98321199505` (вход через Google), открывается без входа.
+Для новой версии видео:
+
+- Загрузка: https://member.bilibili.com/platform/upload/video/frame, файл
+  `store/media/video/vetka-setup-zh.mp4`.
+- 封面: `store/media/vetka-features-zh-1920x1080.png`.
+- 标题: `Vetka – Git for Unity：安装与功能演示`; 类型: 自制; теги `Unity`, `团结引擎`, `Git`, `版本控制`,
+  `编辑器扩展`.
+- 简介: строка Summary из `listing-zh.md` и `官网：https://upwake.dev/vetka/`.
+- После модерации (статус в 创作中心 → 内容管理) взять ссылку `https://www.bilibili.com/video/BV...`.
 
 ## 7. Отправка
 
