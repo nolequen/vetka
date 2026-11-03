@@ -100,3 +100,5 @@ InitTestScene*.unity*
 
 # Asset Store Publishing Tools (installed only for the upload)
 /[Pp]ackages/com.unity.asset-store-tools/
+
+/store/

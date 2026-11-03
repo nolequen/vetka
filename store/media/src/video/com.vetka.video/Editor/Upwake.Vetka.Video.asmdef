@@ -1,7 +1,0 @@
-{
-    "name": "Upwake.Vetka.Video",
-    "includePlatforms": [
-        "Editor"
-    ],
-    "autoReferenced": false
-}
