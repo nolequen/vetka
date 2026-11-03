@@ -23,7 +23,7 @@
 
 ## 3. Package Upload
 
-- [ ] Файл: `E:\releases\vetka-0.2.0-tuanjie.unitypackage` (114 КБ, `Assets/Vetka`, без зависимостей).
+- [ ] Файл: `store\releases\vetka-0.2.0-tuanjie.unitypackage` (114 КБ, `Assets/Vetka`, без зависимостей).
 - [ ] Минимальная версия редактора: **Tuanjie 1.6** (так советовала поддержка 23 октября).
 - [ ] Совместимость с конвейерами рендеринга: отметить **все три** (Built-in, URP, HDRP) – Vetka работает только в
   редакторе.

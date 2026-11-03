@@ -647,7 +647,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", default=str(STORE / "demo-cn"))
     parser.add_argument("--timeline", default=str(STORE / "media" / "video" / "timeline.json"))
-    parser.add_argument("--package", default=r"E:\releases\vetka-0.2.0-tuanjie.unitypackage")
+    parser.add_argument("--package", default=str(STORE / "releases" / "vetka-0.2.0-tuanjie.unitypackage"))
     parser.add_argument("--message", default="添加冲刺技能")
     parser.add_argument("--branch", default="feature/存档")
     parser.add_argument("--merge", default="fix/spawn-rate")
