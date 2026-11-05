@@ -1,6 +1,7 @@
 # Vetka – Git for Unity
 
 [![Version 0.2.0](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/nolequen/vetka/releases/latest)
+[![Unity Asset Store](https://img.shields.io/badge/Unity_Asset_Store-Vetka-black?logo=unity)](https://assetstore.unity.com/packages/tools/version-control/vetka-git-for-unity-414514)
 [![Unity 6.0+](https://img.shields.io/badge/Unity-6.0%2B-black?logo=unity)](Packages/dev.upwake.vetka/README.md#requirements)
 [![Tuanjie 1.6+](https://img.shields.io/badge/Tuanjie-1.6%2B-black)](Packages/dev.upwake.vetka/README.md#requirements)
 [![Website](https://img.shields.io/badge/docs-upwake.dev%2Fvetka-blue)](https://upwake.dev/vetka/)
@@ -16,8 +17,11 @@ and hosting you already use.
 
 ## Installation
 
-Vetka is a UPM package, `dev.upwake.vetka`. With access to this repository, install it in one of
-these ways:
+- **Unity Asset Store:** get [Vetka – Git for Unity](https://assetstore.unity.com/packages/tools/version-control/vetka-git-for-unity-414514),
+  then **Package Manager → My Assets → Vetka → Download → Import**. The Asset Store copy goes to
+  `Assets/Vetka`.
+
+Or install the UPM package `dev.upwake.vetka` from this repository:
 
 - **Package Manager → + → Add package from tarball…** with `dev.upwake.vetka-<version>.tgz` from
   [GitHub Releases](https://github.com/nolequen/vetka/releases);
