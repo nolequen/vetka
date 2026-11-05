@@ -91,5 +91,11 @@ namespace Upwake.Vetka
         {
             SettingsService.OpenUserPreferences(GitSettingsProvider.Path);
         }
+
+        [MenuItem("Tools/Git/Report a Problem...", false, 20)]
+        public static void ReportProblem()
+        {
+            ProblemReport.Open();
+        }
     }
 }

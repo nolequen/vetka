@@ -12,6 +12,7 @@ and hosting you already use.
 - [Package README](Packages/dev.upwake.vetka/README.md) – features, requirements and getting started.
 - [Website](https://upwake.dev/vetka/).
 - [Changelog](Packages/dev.upwake.vetka/CHANGELOG.md).
+- [Issues](https://github.com/nolequen/vetka/issues) – bug reports and feature requests.
 
 ## Installation
 

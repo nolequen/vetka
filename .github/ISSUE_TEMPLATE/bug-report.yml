@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Vetka does not work as expected.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Tools → Git → Commit...
+        2. ...
+  - type: textarea
+    id: log
+    attributes:
+      label: Console output
+      description: Turn on Edit → Preferences → Vetka → Verbose logging, repeat the problem and paste the Console lines here.
+      render: text
+  - type: input
+    id: unity
+    attributes:
+      label: Unity or Tuanjie version
+    validations:
+      required: true
+  - type: input
+    id: vetka
+    attributes:
+      label: Vetka version
+    validations:
+      required: true
+  - type: input
+    id: git
+    attributes:
+      label: Git version
+      description: Output of `git --version`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Where did you get Vetka?
+      options:
+        - Unity Asset Store
+        - Unity China Asset Store
+        - GitHub Releases
+        - Other

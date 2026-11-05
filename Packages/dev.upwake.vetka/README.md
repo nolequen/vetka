@@ -58,4 +58,8 @@ Proprietary, all rights reserved – see [LICENSE.md](LICENSE.md). Copies obtain
 Asset Store are licensed under the Asset Store EULA, copies obtained from the Unity China Asset
 Store under its Terms of Service and EULA.
 
-Contact: [vetka@upwake.dev](mailto:vetka@upwake.dev)
+Support: report bugs and request features in
+[GitHub issues](https://github.com/nolequen/vetka/issues), or use **Tools → Git → Report a
+Problem...**: it opens the bug form in your browser with the Unity, Vetka, Git and OS versions
+filled in, and nothing is sent until you submit it. Private questions:
+[vetka@upwake.dev](mailto:vetka@upwake.dev).
