@@ -130,7 +130,7 @@ namespace Upwake.Vetka.Tests
                 return GitResult.Success("done");
             }, _ => done = true, progressId: progress);
 
-            yield return WaitUntil(() => started);
+            yield return WaitUntil(() => started && Progress.EnumerateItems().Any(item => item.id == progress));
             var shown = Progress.EnumerateItems().Where(item => item.name == "Git: started early")
                 .Select(item => item.id).ToList();
             release.Set();
