@@ -690,7 +690,7 @@ namespace Upwake.Vetka.Tests
             using var upstream = remote.PublishBase();
             using var local = remote.Clone("local");
             upstream.PushChange("f.txt", "theirs");
-            remote.Write("hooks/pre-receive",
+            remote.WriteHook("hooks/pre-receive",
                 "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/tags/*) " +
                 "echo 'protected tag' >&2; exit 1;; esac; done\nexit 0\n");
             local.RunGit("tag", "-a", "-m", "release", "v1");
@@ -729,7 +729,7 @@ namespace Upwake.Vetka.Tests
             using var upstream = remote.PublishBase();
             upstream.RunGit("tag", "v1");
             upstream.RunGit("push", "-q", "origin", "v1");
-            remote.Write("hooks/pre-receive",
+            remote.WriteHook("hooks/pre-receive",
                 "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) " +
                 "echo 'protected branch' >&2; exit 1;; esac; done\nexit 0\n");
             using var local = remote.Clone("local");

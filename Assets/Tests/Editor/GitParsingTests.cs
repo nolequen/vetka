@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -404,13 +405,27 @@ namespace Upwake.Vetka.Tests
             Assert.IsNull(ProjectStatus.RepositoryPath(new ProjectStatus.Snapshot(), "Assets/Scripts/Player.cs"));
         }
 
-        [TestCase("E:/repo", @"E:\repo\Game\Packages\Some Folder", "Game/Packages/Some Folder")]
-        [TestCase("E:/repo", @"E:\repo\Shared\com.studio.tools", "Shared/com.studio.tools")]
-        [TestCase("E:/repo", @"E:\elsewhere\package", null)]
-        [TestCase("E:/repo", @"D:\package", null)]
-        public void PackageRoot_MapsThePackageFolderIntoTheRepository(string top, string resolved, string expected)
+        private static readonly string PackageRepository =
+            Path.Combine(Path.GetPathRoot(Path.GetTempPath()), "repo");
+
+        [TestCase("Game/Packages/Some Folder", "Game/Packages/Some Folder")]
+        [TestCase("Shared/com.studio.tools", "Shared/com.studio.tools")]
+        [TestCase("../elsewhere/package", null)]
+        public void PackageRoot_MapsThePackageFolderIntoTheRepository(string resolved, string expected)
         {
-            Assert.AreEqual(expected, ProjectStatus.PackageRoot(top, resolved));
+            var path = Path.GetFullPath(Path.Combine(PackageRepository,
+                resolved.Replace('/', Path.DirectorySeparatorChar)));
+            Assert.AreEqual(expected, ProjectStatus.PackageRoot(PackageRepository.Replace('\\', '/'), path));
+        }
+
+        [Test]
+        public void PackageRoot_OnAnotherDrive_IsOutsideTheRepository()
+        {
+            var otherRoot = Environment.OSVersion.Platform != PlatformID.Win32NT
+                ? "/"
+                : PackageRepository.StartsWith("D", StringComparison.OrdinalIgnoreCase) ? @"E:\" : @"D:\";
+            Assert.IsNull(ProjectStatus.PackageRoot(PackageRepository.Replace('\\', '/'),
+                Path.Combine(otherRoot, "package")));
         }
 
         [Test]
