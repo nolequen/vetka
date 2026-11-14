@@ -1,0 +1,181 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || 'unity-licence' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check-script:
+    name: Check script
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run the check script against the fixtures
+        working-directory: .github/scripts/fixtures
+        run: |
+          failed=0
+          while read -r expected command first second; do
+            set +e
+            if [ "$command" = check ]; then
+              output=$(python3 ../check-results.py check --os "$first" "$second" 2>&1)
+            else
+              output=$(python3 ../check-results.py totals "$first" 2>&1)
+            fi
+            actual=$?
+            set -e
+            if [ "$actual" = "$expected" ]; then
+              echo "ok: $command $first $second -> $actual"
+            else
+              echo "::error::$command $first $second exited with $actual, expected $expected"
+              echo "$output"
+              failed=1
+            fi
+          done < expected.txt
+          exit "$failed"
+
+  tests:
+    name: ${{ matrix.os }} / Unity ${{ matrix.unity.version }}
+    needs: check-script
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'nolequen/vetka'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-22.04"]' || '["ubuntu-22.04","windows-latest","macos-latest"]') }}
+        unity: ${{ fromJSON(github.event_name == 'pull_request' && '[{"version":"6000.0.74f1","changeset":"7685f01dc6be"}]' || '[{"version":"6000.0.74f1","changeset":"7685f01dc6be"},{"version":"6000.3.28f1","changeset":"8f082d2fe476"},{"version":"2022.3.62f3","changeset":"96770f904ca7","host":true}]') }}
+    env:
+      RESULTS: ${{ github.workspace }}/ci-results
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Git
+        run: |
+          command -v git
+          git --version
+
+      - name: Korean locale
+        if: runner.os == 'Linux'
+        run: sudo locale-gen ko_KR.UTF-8
+
+      - name: Install Unity
+        uses: buildalon/unity-setup@f593b2d141ab3c6523b2ec97c555ff6b58c29ffa # v3.0.1
+        with:
+          unity-version: ${{ matrix.unity.version }} (${{ matrix.unity.changeset }})
+          modules: None
+
+      - name: Activate the licence
+        uses: buildalon/activate-unity-license@822d378246868a7bf55041ee23721a580aa38146 # v3.0.1
+        with:
+          license: personal
+          username: ${{ secrets.UNITY_EMAIL }}
+          password: ${{ secrets.UNITY_PASSWORD }}
+
+      - name: Prepare the project
+        id: project
+        env:
+          HOST: ${{ matrix.unity.host }}
+        run: |
+          mkdir -p "$RESULTS"
+          if [ "$HOST" = true ]; then
+            project=$RUNNER_TEMP/host
+            bash .github/scripts/make-host.sh "$UNITY_EDITOR_PATH" "$GITHUB_WORKSPACE" "$project" "$RESULTS/create-project.log"
+          else
+            project=$GITHUB_WORKSPACE
+          fi
+          echo "PROJECT=$project" >> "$GITHUB_ENV"
+          echo "path=$project" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Library
+        id: library
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.project.outputs.path }}/Library
+          key: Library-${{ runner.os }}-${{ matrix.unity.version }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**', '.github/scripts/make-host.sh') }}
+          restore-keys: Library-${{ runner.os }}-${{ matrix.unity.version }}-
+
+      - name: Run the tests
+        id: tests
+        timeout-minutes: 70
+        run: |
+          echo "Unity: $UNITY_EDITOR_PATH"
+          echo "Project: $PROJECT"
+          set +e
+          "$UNITY_EDITOR_PATH" -batchmode -nographics \
+            -projectPath "$PROJECT" \
+            -runTests -testPlatform EditMode \
+            -testResults "$RESULTS/results.xml" \
+            -logFile "$RESULTS/editor.log"
+          code=$?
+          set -e
+          echo "Unity exited with $code"
+          if [ "$code" -ne 0 ]; then
+            tail -n 100 "$RESULTS/editor.log" || true
+          fi
+          exit "$code"
+
+      - name: Check the results
+        if: ${{ !cancelled() }}
+        env:
+          TITLE: ${{ matrix.os }} / Unity ${{ matrix.unity.version }}
+        run: >
+          python .github/scripts/check-results.py check "$RESULTS/results.xml"
+          --os "$RUNNER_OS"
+          --title "$TITLE"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Save Library
+        if: ${{ !cancelled() && steps.library.outputs.cache-hit != 'true' && hashFiles('ci-results/results.xml') != '' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.project.outputs.path }}/Library
+          key: ${{ steps.library.outputs.cache-primary-key }}
+
+      - name: Upload results and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: results-${{ runner.os }}-${{ matrix.unity.version }}
+          path: ci-results
+          if-no-files-found: warn
+
+  totals:
+    name: Case totals
+    needs: tests
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.tests.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: results-*
+          path: all-results
+
+      - name: Compare the case totals
+        run: python3 .github/scripts/check-results.py totals all-results --summary "$GITHUB_STEP_SUMMARY"

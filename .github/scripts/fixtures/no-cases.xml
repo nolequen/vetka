@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<test-run id="2" testcasecount="0" result="Passed" total="0" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0" engine-version="3.5.0.0" clr-version="4.0.30319.42000" start-time="2026-11-06 10:00:00Z" end-time="2026-11-06 10:01:00Z" duration="60">
+  <test-suite type="TestSuite" id="1000" name="vetka" fullname="vetka" runstate="Runnable" testcasecount="0" result="Passed" start-time="2026-11-06 10:00:00Z" end-time="2026-11-06 10:01:00Z" duration="60" total="0" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0">
+    <test-suite type="Assembly" id="1001" name="Upwake.Vetka.Editor.Tests.dll" fullname="Upwake.Vetka.Editor.Tests.dll" runstate="Runnable" testcasecount="0" result="Passed" total="0" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0">
+      <test-suite type="TestFixture" id="1002" name="GitWorkflowTests" fullname="Upwake.Vetka.Tests.GitWorkflowTests" classname="Upwake.Vetka.Tests.GitWorkflowTests" runstate="Runnable" testcasecount="0" result="Passed" total="0" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0">
+
+      </test-suite>
+    </test-suite>
+  </test-suite>
+</test-run>

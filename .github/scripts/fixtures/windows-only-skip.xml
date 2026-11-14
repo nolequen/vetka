@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<test-run id="2" testcasecount="3" result="Passed" total="3" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0" engine-version="3.5.0.0" clr-version="4.0.30319.42000" start-time="2026-11-06 10:00:00Z" end-time="2026-11-06 10:01:00Z" duration="60">
+  <test-suite type="TestSuite" id="1000" name="vetka" fullname="vetka" runstate="Runnable" testcasecount="3" result="Passed" start-time="2026-11-06 10:00:00Z" end-time="2026-11-06 10:01:00Z" duration="60" total="3" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0">
+    <test-suite type="Assembly" id="1001" name="Upwake.Vetka.Editor.Tests.dll" fullname="Upwake.Vetka.Editor.Tests.dll" runstate="Runnable" testcasecount="3" result="Passed" total="3" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0">
+      <test-suite type="TestFixture" id="1002" name="GitWorkflowTests" fullname="Upwake.Vetka.Tests.GitWorkflowTests" classname="Upwake.Vetka.Tests.GitWorkflowTests" runstate="Runnable" testcasecount="3" result="Passed" total="3" passed="0" failed="0" inconclusive="0" skipped="0" asserts="0">
+        <test-case id="1" name="Commit_SavesTheStagedFiles" fullname="Upwake.Vetka.Tests.GitWorkflowTests.Commit_SavesTheStagedFiles" methodname="Commit_SavesTheStagedFiles" classname="Upwake.Vetka.Tests.GitWorkflowTests" runstate="Runnable" seed="1" result="Passed" start-time="2026-11-06 10:00:00Z" end-time="2026-11-06 10:00:01Z" duration="1" asserts="0" />
+        <test-case id="2" name="Push_SendsTheBranch" fullname="Upwake.Vetka.Tests.GitWorkflowTests.Push_SendsTheBranch" methodname="Push_SendsTheBranch" classname="Upwake.Vetka.Tests.GitWorkflowTests" runstate="Runnable" seed="1" result="Passed" start-time="2026-11-06 10:00:00Z" end-time="2026-11-06 10:00:01Z" duration="1" asserts="0" />
+        <test-case id="3" name="Discard_KeepsAFileInUse" fullname="Upwake.Vetka.Tests.GitWorkflowTests.Discard_KeepsAFileInUse" methodname="Discard_KeepsAFileInUse" classname="Upwake.Vetka.Tests.GitWorkflowTests" runstate="Runnable" seed="1" result="Skipped" label="Ignored" start-time="2026-11-06 10:00:00Z" end-time="2026-11-06 10:00:01Z" duration="1" asserts="0">
+          <reason>
+            <message><![CDATA[Only Windows keeps a file that is in use from being replaced]]></message>
+          </reason>
+        </test-case>
+      </test-suite>
+    </test-suite>
+  </test-suite>
+</test-run>

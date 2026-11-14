@@ -1,0 +1,17 @@
+0 check Linux green.xml
+0 check Windows green.xml
+1 check Linux failed.xml
+1 check Linux git-missing.xml
+1 check Windows git-missing.xml
+0 check Linux windows-only-skip.xml
+0 check macOS windows-only-skip.xml
+1 check Windows windows-only-skip.xml
+1 check Linux unexpected-skip.xml
+1 check Linux inconclusive.xml
+1 check Linux no-cases.xml
+1 check Linux teardown.xml
+1 check Linux empty.xml
+1 check Linux missing.xml
+0 totals totals-same
+1 totals totals-different
+0 totals no-such-folder
