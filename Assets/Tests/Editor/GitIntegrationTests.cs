@@ -439,7 +439,7 @@ namespace Upwake.Vetka.Tests
             repo.Write("Assets/new file.txt", "new\n");
             repo.Write("Assets/marked.txt", "marked by the user\n");
             repo.RunGit("add", "--intent-to-add", "Assets/marked.txt");
-            repo.Write(".git/hooks/pre-commit", "#!/bin/sh\necho rejected by the hook >&2\nexit 1\n");
+            repo.WriteHook(".git/hooks/pre-commit", "#!/bin/sh\necho rejected by the hook >&2\nexit 1\n");
             var before = repo.Snapshot();
 
             var result = repo.Git.Commit(new[] { "a.txt", "Assets/new file.txt", "Assets/marked.txt" }, "rejected");
@@ -1569,7 +1569,7 @@ namespace Upwake.Vetka.Tests
             repo.Write("o.txt", "o\n");
             repo.CommitAll("scene");
             repo.Write("o.txt", "local change\n");
-            repo.Write(".git/hooks/post-merge", "#!/bin/sh\necho 'saved while merging' > Assets/Scene.unity\n");
+            repo.WriteHook(".git/hooks/post-merge", "#!/bin/sh\necho 'saved while merging' > Assets/Scene.unity\n");
 
             var result = repo.Git.Integrate(UpdateStrategy.Merge, "other");
 
@@ -2166,7 +2166,7 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("other");
             repo.RunGit("switch", "-q", "main");
             repo.Write("o.txt", "local change\n");
-            repo.Write(".git/hooks/post-checkout", "#!/bin/sh\necho 'hook failed' >&2\nexit 1\n");
+            repo.WriteHook(".git/hooks/post-checkout", "#!/bin/sh\necho 'hook failed' >&2\nexit 1\n");
 
             var result = repo.Git.Checkout("other");
 
@@ -2614,7 +2614,7 @@ namespace Upwake.Vetka.Tests
             repo.Write("a.txt", "a\n");
             repo.CommitAll("base");
             repo.RunGit("rm", "-q", "--cached", "k.txt");
-            repo.Write(".git/hooks/pre-commit", "#!/bin/sh\necho 'rejected' >&2\nexit 1\n");
+            repo.WriteHook(".git/hooks/pre-commit", "#!/bin/sh\necho 'rejected' >&2\nexit 1\n");
             var before = repo.Snapshot();
 
             var result = repo.Git.Commit(new[] { "k.txt" }, "Untrack k");
@@ -2887,7 +2887,7 @@ namespace Upwake.Vetka.Tests
             repo.CommitAll("other");
             repo.RunGit("switch", "-q", "main");
             repo.Write("f.txt", "local change\n");
-            repo.Write(".git/hooks/post-checkout", "#!/bin/sh\necho 'hook failed' >&2\nexit 1\n");
+            repo.WriteHook(".git/hooks/post-checkout", "#!/bin/sh\necho 'hook failed' >&2\nexit 1\n");
             var before = repo.Snapshot();
 
             var result = repo.Git.Checkout("other");

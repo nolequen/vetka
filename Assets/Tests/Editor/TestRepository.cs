@@ -158,6 +158,29 @@ namespace Upwake.Vetka.Tests
 
         public void Write(string path, string content) => WriteBytes(path, Utf8.GetBytes(content));
 
+        public void WriteHook(string path, string script)
+        {
+            Write(path, script);
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                return;
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "/bin/chmod",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("+x");
+            startInfo.ArgumentList.Add(FullPath(path));
+            using var process = Process.Start(startInfo);
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            Assert.AreEqual(0, process.ExitCode, $"chmod +x {path} failed: {error}");
+        }
+
         public void WriteBytes(string path, byte[] content)
         {
             var file = FullPath(path);
